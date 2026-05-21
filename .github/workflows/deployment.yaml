@@ -1,0 +1,22 @@
+name: Rust Continuous Deployment
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  run-tests-and-coverage:
+    uses: fermi-ad/.github/.github/workflows/rust-deployment.yaml@9d9465e0b6a0c473d68ecf1b04dec74403f48dd3
+    secrets: inherit
+    permissions:
+      contents: write
+      pull-requests: write
+
+# If using a git submodule, add 
+#    with:
+#      pull-git-submodules: true
+
+# If using an internal git repo as a Rust dependency, add
+#    with:
+#      references-internal-git-repo: true
