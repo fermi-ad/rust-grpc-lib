@@ -1,21 +1,21 @@
 //! Protobuf types for all Controls gRPC services.
 //!
 //! The types themselves are generated at build time from the `.proto`
-//! definitions in the `extern/` submodule — do not edit the generated code
+//! definitions in the `interface-definitions/` submodule — do not edit the generated code
 //! directly. However, the **module declarations** in this file must be kept in
-//! sync with the set of services defined in `extern/`. When a new version of
+//! sync with the set of services defined in `interface-definitions/`. When a new version of
 //! the submodule is integrated, follow these steps:
 //!
-//! 1. Update the submodule: `git submodule update --remote extern`
+//! 1. Update the submodule: `git submodule update --remote interface-definitions`
 //! 2. Run `cargo build` to regenerate the compiled proto output.
-//! 3. For each **new** `.proto` service file added to `extern/`:
+//! 3. For each **new** `.proto` service file added to `interface-definitions/`:
 //!    - Add a corresponding `pub mod <name> { tonic::include_proto!("<package>"); }`
 //!      entry inside the appropriate parent module in this file.
 //!    - Add a row to the service table in the crate-level docs in [`lib.rs`](crate).
 //! 4. For each **removed** service:
 //!    - Remove or `#[deprecated]`-mark the corresponding module entry.
 //!    - Remove its row from the service table in [`lib.rs`](crate).
-//! 5. Commit both the updated `extern` pointer and the changes to this file together.
+//! 5. Commit both the updated `interface-definitions` pointer and the changes to this file together.
 //!
 //! The `<package>` string passed to `tonic::include_proto!` must match the
 //! `package` declaration at the top of the `.proto` file, with `.` used as the
@@ -128,7 +128,7 @@ mod tests {
     /// file. When you add or remove a module above, update this list to match.
     ///
     /// `google.protobuf` is intentionally absent — it is compiled from the
-    /// well-known types bundled with `tonic_prost_build`, not from `extern/`.
+    /// well-known types bundled with `tonic_prost_build`, not from `interface-definitions/`.
     const DECLARED_PACKAGES: &[&str] = &[
         "common.alarm",
         "common.device",
@@ -179,8 +179,9 @@ mod tests {
 
     #[test]
     fn declared_packages_match_extern_protos() {
-        let extern_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("extern");
-        let on_disk = collect_proto_packages(&extern_dir);
+        let interface_definitions_dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("interface-definitions");
+        let on_disk = collect_proto_packages(&interface_definitions_dir);
         let declared: HashSet<&str> = DECLARED_PACKAGES.iter().copied().collect();
 
         let missing: Vec<_> = on_disk
@@ -191,9 +192,9 @@ mod tests {
 
         assert!(
             missing.is_empty() && extra.is_empty(),
-            "src/proto.rs is out of sync with extern/:\n\
-             Packages in extern/ but not declared in proto.rs: {missing:?}\n\
-             Packages declared in proto.rs but not found in extern/: {extra:?}\n\
+            "src/proto.rs is out of sync with interface-definitions/:\n\
+             Packages in interface-definitions/ but not declared in proto.rs: {missing:?}\n\
+             Packages declared in proto.rs but not found in interface-definitions/: {extra:?}\n\
              \n\
              Add or remove the corresponding `pub mod` entries in src/proto.rs \
              and update DECLARED_PACKAGES in this test."

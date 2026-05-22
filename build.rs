@@ -1,6 +1,6 @@
 use std::{env, error::Error, ffi::OsStr, fs::read_dir};
 
-const PROTO_DIR: &str = "extern";
+const PROTO_DIR: &str = "interface-definitions";
 const PROTO_EXT: &str = "proto";
 
 fn main() -> Result<(), Box<dyn Error>> {
