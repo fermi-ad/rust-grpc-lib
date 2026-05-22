@@ -33,14 +33,14 @@ use tonic::transport::{Channel, Endpoint, Error};
 
 use crate::GrpcClient;
 
-type ChannelPool = RwLock<HashMap<String, Channel>>;
+type ChannelMap = RwLock<HashMap<String, Channel>>;
 
 const KEEP_ALIVE_INTERVAL_VAR: &str = "RUST_GRPC_LIB_KEEP_ALIVE_INTERVAL_SECS";
 const KEEP_ALIVE_INTERVAL_DEFAULT: u64 = 30;
 const KEEP_ALIVE_TIMEOUT_VAR: &str = "RUST_GRPC_LIB_KEEP_ALIVE_TIMEOUT_SECS";
 const KEEP_ALIVE_TIMEOUT_DEFAULT: u64 = 10;
 
-static POOL: LazyLock<ChannelPool> = LazyLock::new(RwLock::default);
+static POOL: LazyLock<ChannelMap> = LazyLock::new(RwLock::default);
 
 /// Return a gRPC client connected to `endpoint`, reusing an existing channel
 /// if one has already been created for that endpoint.
@@ -98,7 +98,7 @@ pub fn get<C: GrpcClient>(endpoint: &str) -> Result<C, Error> {
 /// As the only mutations to the pool are insertions, the state of the pool should
 /// always be valid. It is therefore safe to simply extract the lock handle from the
 /// error and proceed.
-fn get_or_create_channel(endpoint: &str, pool: &ChannelPool) -> Result<Channel, Error> {
+fn get_or_create_channel(endpoint: &str, pool: &ChannelMap) -> Result<Channel, Error> {
     if let Some(channel) = pool
         .read()
         .unwrap_or_else(|e| e.into_inner())
@@ -140,7 +140,7 @@ fn duration_from_env(var_name: &str, default_secs: u64) -> Duration {
 mod tests {
     use super::*;
 
-    fn empty_pool() -> ChannelPool {
+    fn empty_pool() -> ChannelMap {
         RwLock::new(HashMap::new())
     }
 
