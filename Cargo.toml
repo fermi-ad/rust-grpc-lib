@@ -4,3 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+prost = "0.14"
+rust-env-var-lib = { git = "https://github.com/fermi-ad/rust-env-var-lib", tag = "v1.2.0" }
+tonic = { version = "0.14", features = ["transport"] }
+tonic-prost = "0.14"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[build-dependencies]
+protoc-bin-vendored = "3"
+tonic-prost-build = "0.14"
