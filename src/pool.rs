@@ -11,13 +11,13 @@
 //!
 //! ```rust,ignore
 //! use rust_grpc_lib::register_client;
-//! use rust_grpc_lib::types::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
+//! use rust_grpc_lib::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
 //!
 //! register_client!(AlarmCommandsClient);
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), tonic::transport::Error> {
-//!     let client: AlarmCommandsClient<_> = rust_grpc_lib::pool::client("http://alarm-host:50051")?;
+//!     let client: AlarmCommandsClient<_> = rust_grpc_lib::pool::get("http://alarm-host:50051")?;
 //!     Ok(())
 //! }
 //! ```
@@ -31,7 +31,7 @@ use std::{
 use rust_env_var_lib::env_var;
 use tonic::transport::{Channel, Endpoint, Error};
 
-use crate::FromChannel;
+use crate::GrpcClient;
 
 type ChannelPool = RwLock<HashMap<String, Channel>>;
 
@@ -54,7 +54,7 @@ static POOL: LazyLock<ChannelPool> = LazyLock::new(RwLock::default);
 ///
 /// # Type parameter
 ///
-/// `C` must implement [`FromChannel`]. Use [`register_client!`](crate::register_client)
+/// `C` must implement [`GrpcClient`]. Use [`register_client!`](crate::register_client)
 /// to generate that implementation for any tonic-generated client type.
 ///
 /// # Errors
@@ -69,17 +69,17 @@ static POOL: LazyLock<ChannelPool> = LazyLock::new(RwLock::default);
 ///
 /// ```rust,ignore
 /// use rust_grpc_lib::register_client;
-/// use rust_grpc_lib::types::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
+/// use rust_grpc_lib::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
 ///
 /// register_client!(AlarmCommandsClient);
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), tonic::transport::Error> {
-///     let client: AlarmCommandsClient<_> = rust_grpc_lib::pool::client("http://alarm-host:50051")?;
+///     let client: AlarmCommandsClient<_> = rust_grpc_lib::pool::get("http://alarm-host:50051")?;
 ///     Ok(())
 /// }
 /// ```
-pub fn client<C: FromChannel>(endpoint: &str) -> Result<C, Error> {
+pub fn get<C: GrpcClient>(endpoint: &str) -> Result<C, Error> {
     let channel = get_or_create_channel(endpoint, &POOL)?;
     Ok(C::from_channel(channel))
 }
@@ -116,11 +116,11 @@ fn get_or_create_channel(endpoint: &str, pool: &ChannelPool) -> Result<Channel, 
     }
 
     let channel = Endpoint::new(endpoint.to_string())?
-        .http2_keep_alive_interval(read_duration_val(
+        .http2_keep_alive_interval(duration_from_env(
             KEEP_ALIVE_INTERVAL_VAR,
             KEEP_ALIVE_INTERVAL_DEFAULT,
         ))
-        .keep_alive_timeout(read_duration_val(
+        .keep_alive_timeout(duration_from_env(
             KEEP_ALIVE_TIMEOUT_VAR,
             KEEP_ALIVE_TIMEOUT_DEFAULT,
         ))
@@ -131,8 +131,8 @@ fn get_or_create_channel(endpoint: &str, pool: &ChannelPool) -> Result<Channel, 
     Ok(channel)
 }
 
-fn read_duration_val(var_name: &str, preset_default: u64) -> Duration {
-    let seconds = env_var::get(var_name).or(preset_default);
+fn duration_from_env(var_name: &str, default_secs: u64) -> Duration {
+    let seconds = env_var::get(var_name).or(default_secs);
     Duration::from_secs(seconds)
 }
 

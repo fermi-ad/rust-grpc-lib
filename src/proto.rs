@@ -36,11 +36,11 @@
 //! client struct. For example:
 //!
 //! ```rust,no_run
-//! use rust_grpc_lib::types::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
+//! use rust_grpc_lib::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
 //! ```
 //!
 //! Register the client with [`register_client!`](crate::register_client) before
-//! passing it to [`pool::client`](crate::pool::client).
+//! passing it to [`pool::get`](crate::pool::get).
 
 pub mod common {
     pub mod alarm {
@@ -191,11 +191,11 @@ mod tests {
 
         assert!(
             missing.is_empty() && extra.is_empty(),
-            "src/types.rs is out of sync with extern/:\n\
-             Packages in extern/ but not declared in types.rs: {missing:?}\n\
-             Packages declared in types.rs but not found in extern/: {extra:?}\n\
+            "src/proto.rs is out of sync with extern/:\n\
+             Packages in extern/ but not declared in proto.rs: {missing:?}\n\
+             Packages declared in proto.rs but not found in extern/: {extra:?}\n\
              \n\
-             Add or remove the corresponding `pub mod` entries in src/types.rs \
+             Add or remove the corresponding `pub mod` entries in src/proto.rs \
              and update DECLARED_PACKAGES in this test."
         );
     }

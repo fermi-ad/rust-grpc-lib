@@ -5,7 +5,7 @@ A Rust library that provides auto-generated gRPC client structs and handles conn
 ## What it does
 
 - Compiles the `.proto` definitions from the [`interface-definitions`](https://github.com/fermi-ad/interface-definitions) repository at build time using [`tonic`](https://github.com/hyperium/tonic)
-- Exposes the generated message types and service clients under `rust_grpc_lib::types`
+- Exposes the generated message types and service clients under `rust_grpc_lib::proto`
 - Manages a process-wide pool of lazily-connected `Channel`s so callers share connections without coordinating themselves
 
 ## Adding as a dependency
@@ -25,36 +25,36 @@ This library requires a [Tokio](https://tokio.rs) runtime. Tonic's transport lay
 
 ```rust
 use rust_grpc_lib::pool;
-use rust_grpc_lib::types::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
+use rust_grpc_lib::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
 use rust_grpc_lib::register_client;
 
 register_client!(AlarmCommandsClient);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client: AlarmCommandsClient<_> = pool::client("http://alarm-commands-host:50051")?;
+    let client: AlarmCommandsClient<_> = pool::get("http://alarm-commands-host:50051")?;
     // use client...
     Ok(())
 }
 ```
 
-`pool::client` returns a client backed by a shared, lazily-connected channel. Calling the function multiple times with the same endpoint string reuses the same underlying connection.
+`pool::get` returns a client backed by a shared, lazily-connected channel. Calling the function multiple times with the same endpoint string reuses the same underlying connection.
 
 ## Available services
 
 | Module path | Service |
 |---|---|
-| `types::services::alarm_commands` | Alarm Commands |
-| `types::services::alarm_groups` | Alarm Groups (DB) |
-| `types::services::alarm_timers` | Alarm Timers (DB) |
-| `types::services::alarm_user_layouts` | Alarm User Layouts (DB) |
-| `types::services::clock_event` | Clock Event (ACLK) |
-| `types::services::daq` | Data Acquisition (DAQ) |
-| `types::services::devdb` | Device Database (DevDB) |
-| `types::services::ioc_alarms` | IOC Alarms |
-| `types::services::tlg_placement` | TLG Placement |
+| `proto::services::alarm_commands` | Alarm Commands |
+| `proto::services::alarm_groups` | Alarm Groups (DB) |
+| `proto::services::alarm_timers` | Alarm Timers (DB) |
+| `proto::services::alarm_user_layouts` | Alarm User Layouts (DB) |
+| `proto::services::clock_event` | Clock Event (ACLK) |
+| `proto::services::daq` | Data Acquisition (DAQ) |
+| `proto::services::devdb` | Device Database (DevDB) |
+| `proto::services::ioc_alarms` | IOC Alarms |
+| `proto::services::tlg_placement` | TLG Placement |
 
-Common message types shared across services are under `types::common`.
+Common message types shared across services are under `proto::common`.
 
 ## Adding `derive` macros to generated types (optional)
 

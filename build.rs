@@ -26,14 +26,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     builder.compile_protos(
-        &identify_proto_files(PROTO_DIR, OsStr::new(PROTO_EXT))?,
+        &find_proto_files(PROTO_DIR, OsStr::new(PROTO_EXT))?,
         &[PROTO_DIR.to_string()],
     )?;
 
     Ok(())
 }
 
-fn identify_proto_files(dir: &str, proto_ext: &OsStr) -> Result<Vec<String>, String> {
+fn find_proto_files(dir: &str, proto_ext: &OsStr) -> Result<Vec<String>, String> {
     let mut files = Vec::new();
     let dir_iterator =
         read_dir(dir).map_err(|e| format!("Error reading directory \"{dir}\": {e}"))?;
@@ -42,7 +42,7 @@ fn identify_proto_files(dir: &str, proto_ext: &OsStr) -> Result<Vec<String>, Str
             .map_err(|e| format!("Error reading directory \"{dir}\": {e}"))?
             .path();
         if entry_path.is_dir() {
-            files.append(&mut identify_proto_files(
+            files.append(&mut find_proto_files(
                 &entry_path.to_string_lossy(),
                 proto_ext,
             )?);
