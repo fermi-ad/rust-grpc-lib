@@ -52,6 +52,8 @@ pub mod common {
     pub mod drf {
         tonic::include_proto!("common.drf");
     }
+    // This module contains an inner module with the same name. It needs revisiting in the interface-definitions repo.
+    #[allow(clippy::module_inception)]
     pub mod event {
         tonic::include_proto!("common.event");
     }
@@ -93,6 +95,8 @@ pub mod services {
     pub mod daq {
         tonic::include_proto!("services.daq");
     }
+    // devdb is subject to some rework, so we ignore the large enum complaints for now.
+    #[allow(clippy::large_enum_variant)]
     pub mod devdb {
         tonic::include_proto!("services.devdb");
     }
@@ -155,17 +159,17 @@ mod tests {
             let path = entry.path();
             if path.is_dir() {
                 packages.extend(collect_proto_packages(&path));
-            } else if path.extension() == Some(OsStr::new("proto")) {
-                if let Ok(contents) = std::fs::read_to_string(&path) {
-                    for line in contents.lines() {
-                        let trimmed = line.trim();
-                        if let Some(rest) = trimmed.strip_prefix("package ") {
-                            let pkg = rest.trim_end_matches(';').trim().to_string();
-                            if !pkg.is_empty() {
-                                packages.insert(pkg);
-                            }
-                            break;
+            } else if path.extension() == Some(OsStr::new("proto"))
+                && let Ok(contents) = std::fs::read_to_string(&path)
+            {
+                for line in contents.lines() {
+                    let trimmed = line.trim();
+                    if let Some(rest) = trimmed.strip_prefix("package ") {
+                        let pkg = rest.trim_end_matches(';').trim().to_string();
+                        if !pkg.is_empty() {
+                            packages.insert(pkg);
                         }
+                        break;
                     }
                 }
             }
