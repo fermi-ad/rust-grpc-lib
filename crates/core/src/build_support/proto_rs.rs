@@ -98,14 +98,11 @@ impl ProtoRsGenerator {
 
         write_header(&mut out, packages);
 
-        // Most consumers will only use a subset of the generated files.
-        // Turning off clippy's unused code detection for the generated code.
-        out.push_str("#![allow(clippy::all)]\n");
-        out.push('\n');
-
         // Emit the google.protobuf well-known types first (not from interface-definitions).
         out.push_str("pub mod google {\n");
         out.push_str("    pub mod protobuf {\n");
+        out.push_str("        #![allow(clippy::all)]\n");
+        out.push_str("        #![allow(unused)]\n");
         out.push_str("        tonic::include_proto!(\"google.protobuf\");\n");
         out.push_str("    }\n");
         out.push_str("}\n");
@@ -510,7 +507,7 @@ mod tests {
     fn generate_empty_packages() {
         let out = plain().generate(&[]);
         assert!(
-            out.trim_end().ends_with("pub mod google {\n    pub mod protobuf {\n        tonic::include_proto!(\"google.protobuf\");\n    }\n}")
+            out.trim_end().ends_with("pub mod google {\n    pub mod protobuf {\n        #![allow(clippy::all)]\n        #![allow(unused)]\n        tonic::include_proto!(\"google.protobuf\");\n    }\n}")
         );
     }
 
