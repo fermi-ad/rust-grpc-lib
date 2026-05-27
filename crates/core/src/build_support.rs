@@ -108,7 +108,7 @@ pub fn generate_protos() -> Result<(), Box<dyn Error>> {
     let interface_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/interface-definitions");
     let mut proto_dir = interface_dir.to_string();
     proto_dir.push_str("/proto");
-    let proto_files = file_utils::find_proto_files(&proto_dir, &OsStr::new("proto"))?;
+    let proto_files = file_utils::find_proto_files(&proto_dir, OsStr::new("proto"))?;
 
     codegen::compile(interface_dir, &proto_files)?;
 

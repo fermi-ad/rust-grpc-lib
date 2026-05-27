@@ -20,17 +20,7 @@ pub(super) fn build_contents(packages: &[String]) -> String {
             ],
             ..Default::default()
         })
-        .with_meta("common.event", PackageMeta {
-            // This module contains an inner module with the same name.
-            inner_attrs: vec!["#![allow(clippy::module_inception)]".to_string()],
-            ..Default::default()
-        })
-        .with_meta("services.devdb", PackageMeta {
-            inner_attrs: vec!["#![allow(clippy::large_enum_variant)]".to_string()],
-            ..Default::default()
-        })
         .with_meta("services.example", PackageMeta {
-            outer_attrs: vec!["#[doc(hidden)]".to_string()],
             doc: vec![
                 "/// The `example` module gets used by the [`grpc-db-template`](https://github.com/fermi-ad/grpc-db-template) repo.".to_string(),
                 "/// It is included here for completeness, so the template can use this library out of the gate.".to_string(),
@@ -110,7 +100,7 @@ impl ProtoRsGenerator {
 
         // Most consumers will only use a subset of the generated files.
         // Turning off clippy's unused code detection for the generated code.
-        out.push_str("#![allow(unused)]\n");
+        out.push_str("#![allow(clippy::all)]\n");
         out.push('\n');
 
         // Emit the google.protobuf well-known types first (not from interface-definitions).
@@ -216,9 +206,7 @@ fn write_header(out: &mut String, packages: &[String]) {
     out.push_str("//! -- The following packages are included --\n");
     out.push_str("//!\n");
     out.push_str("//! Well-known types from Google:\n");
-    out.push_str("//! * google.protobuf.Empty\n");
-    out.push_str("//! * google.protobuf.Duration\n");
-    out.push_str("//! * google.protobuf.Timestamp\n");
+    out.push_str("//! * google.protobuf\n");
     out.push_str("//!\n");
     out.push_str("//! Generated types from interface-definitions:\n");
     for package in packages {

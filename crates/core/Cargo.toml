@@ -18,11 +18,9 @@ build = ["dep:protoc-bin-vendored", "dep:tonic-prost-build"]
 
 [dependencies]
 grpc-client-macro = { path = "../grpc_client_macro" }
-prost = "0.14"
 protoc-bin-vendored = { version = "3", optional = true }
 rust-env-var-lib = { git = "https://github.com/fermi-ad/rust-env-var-lib", tag = "v1.2.0" }
 tonic = { version = "0.14", features = ["transport"] }
-tonic-prost = "0.14"
 tonic-prost-build = { version = "0.14", optional = true }
 
 [dev-dependencies]
