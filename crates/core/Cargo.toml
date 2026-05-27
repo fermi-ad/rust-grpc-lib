@@ -1,0 +1,29 @@
+[package]
+name = "rust-grpc-lib"
+version = "2.0.0"
+description = "A library to encapsulate the Fermilab-specific gRPC interface generation and transport logic for Rust projects"
+repository = "https://github.com/fermi-ad/rust-grpc-lib"
+edition = "2024"
+
+# Ship the bundled .proto files so consumers can run code-gen from their own
+# build.rs without knowing about the source files. env!("CARGO_MANIFEST_DIR")
+# inside run_build() resolves to this crate's directory on the consumer's machine.
+include = [
+    "src/**/*",
+    "interface-definitions/proto/**/*.proto",
+]
+
+[features]
+build = ["dep:protoc-bin-vendored", "dep:tonic-prost-build"]
+
+[dependencies]
+grpc-client-macro = { path = "../grpc_client_macro" }
+protoc-bin-vendored = { version = "3", optional = true }
+rust-env-var-lib = { git = "https://github.com/fermi-ad/rust-env-var-lib", tag = "v1.2.0" }
+tonic = { version = "0.14", features = ["transport"] }
+tonic-prost-build = { version = "0.14", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+protoc-bin-vendored = "3"
+tonic-prost-build = "0.14"

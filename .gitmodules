@@ -1,3 +1,3 @@
-[submodule "interface-definitions"]
-	path = interface-definitions
+[submodule "crates/core/interface-definitions"]
+	path = crates/core/interface-definitions
 	url = https://github.com/fermi-ad/interface-definitions
