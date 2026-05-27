@@ -180,6 +180,11 @@ impl ProtoRsGenerator {
         for attr in &m.inner_attrs {
             out.push_str(&format!("{indent}    {attr}\n"));
         }
+
+        // Now add guards so the included files don't get flagged by the linter.
+        // Consumers will not have a way to fix linting errors in the generated code.
+        out.push_str(&format!("{indent}    #![allow(clippy::all)]\n"));
+        out.push_str(&format!("{indent}    #![allow(unused)]\n"));
         // Prost escapes reserved keywords in generated filenames (e.g. `type` → `r#type`),
         // so the include_proto! argument must use the same escaping.
         let include_arg: String = pkg
@@ -199,18 +204,18 @@ impl ProtoRsGenerator {
 // ---------------------------------------------------------------------------
 
 fn write_header(out: &mut String, packages: &[String]) {
-    out.push_str("//! Auto-generated proto.rs file\n");
-    out.push_str("//!\n");
-    out.push_str("//! **Contains the rust implementations of the protobuf definitions**\n");
-    out.push_str("//!\n");
-    out.push_str("//! -- The following packages are included --\n");
-    out.push_str("//!\n");
-    out.push_str("//! Well-known types from Google:\n");
-    out.push_str("//! * google.protobuf\n");
-    out.push_str("//!\n");
-    out.push_str("//! Generated types from interface-definitions:\n");
+    out.push_str("/// Auto-generated proto.rs file\n");
+    out.push_str("///\n");
+    out.push_str("/// **Contains the rust implementations of the protobuf definitions**\n");
+    out.push_str("///\n");
+    out.push_str("/// -- The following packages are included --\n");
+    out.push_str("///\n");
+    out.push_str("/// Well-known types from Google:\n");
+    out.push_str("/// * google.protobuf\n");
+    out.push_str("///\n");
+    out.push_str("/// Generated types from interface-definitions:\n");
     for package in packages {
-        out.push_str(&format!("//! * {package}\n"));
+        out.push_str(&format!("/// * {package}\n"));
     }
     out.push('\n');
 }
