@@ -10,10 +10,7 @@
 //! layer is built on Tokio and there is no way to use it without one.
 //!
 //! ```rust,ignore
-//! use rust_grpc_lib::register_client;
 //! use rust_grpc_lib::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
-//!
-//! register_client!(AlarmCommandsClient);
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), tonic::transport::Error> {
@@ -54,8 +51,8 @@ static POOL: LazyLock<ChannelMap> = LazyLock::new(RwLock::default);
 ///
 /// # Type parameter
 ///
-/// `C` must implement [`GrpcClient`]. Use [`register_client!`](crate::register_client)
-/// to generate that implementation for any tonic-generated client type.
+/// `C` must implement [`GrpcClient`]. All generated tonic service clients in
+/// this library implement [`GrpcClient`] automatically.
 ///
 /// # Errors
 ///
@@ -68,10 +65,7 @@ static POOL: LazyLock<ChannelMap> = LazyLock::new(RwLock::default);
 /// # Example
 ///
 /// ```rust,ignore
-/// use rust_grpc_lib::register_client;
 /// use rust_grpc_lib::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
-///
-/// register_client!(AlarmCommandsClient);
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), tonic::transport::Error> {
