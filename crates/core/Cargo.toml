@@ -1,6 +1,6 @@
 [package]
 name = "rust-grpc-lib"
-version = "2.0.1"
+version = "3.0.0"
 description = "A library to encapsulate the Fermilab-specific gRPC interface generation and transport logic for Rust projects"
 repository = "https://github.com/fermi-ad/rust-grpc-lib"
 edition = "2024"
