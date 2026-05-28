@@ -158,6 +158,8 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// use rust_grpc_lib::build_support::Config;
+    ///
     /// let mut config = Config::new();
     /// // Attaches a mock trait derive directly onto the generated gRPC client struct
     /// config = config.client_attribute("my_package.MyService", "#[derive(mockall::automock)]");
@@ -181,6 +183,8 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// use rust_grpc_lib::build_support::Config;
+    ///
     /// let mut config = Config::new();
     /// // Conditionally compiles the entire client module structure using cargo feature gates
     /// config = config.client_mod_attribute("my_package.MyService", "#[cfg(feature = \"client\")]");
@@ -207,6 +211,8 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// use rust_grpc_lib::build_support::Config;
+    ///
     /// let mut config = Config::new();
     /// // Derives enum-specific utilities (like string mapping) only on standalone enums
     /// config.enum_attribute("my_package.UserRole", "#[derive(strum::EnumString, strum::Display)]");
@@ -229,6 +235,8 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// use rust_grpc_lib::build_support::Config;
+    ///
     /// let mut config = Config::new();
     /// // Injects a serde rule directly above the `hashed_password` struct field
     /// config = config.field_attribute("my_package.User.hashed_password", "#[serde(skip_serializing)]");
@@ -251,6 +259,8 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// use rust_grpc_lib::build_support::Config;
+    ///
     /// let mut config = Config::new();
     /// // Applies a struct-specific macro only to the "User" message struct, ignoring enums
     /// config = config.message_attribute("my_package.User", "#[derive(SomeStructOnlyMacro)]");
@@ -273,6 +283,8 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// use rust_grpc_lib::build_support::Config;
+    ///
     /// let mut config = Config::new();
     /// // Forces a specific custom handling or restriction macro directly onto the server trait
     /// config = config.server_attribute("my_package.MyService", "#[custom_server_gate]");
@@ -295,6 +307,8 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// use rust_grpc_lib::build_support::Config;
+    ///
     /// let mut config = Config::new();
     /// // Disables specific Clippy warnings across the entire generated server codebase module
     /// config = config.server_mod_attribute("my_package.MyService", "#[allow(clippy::too_many_arguments)]");
@@ -318,6 +332,8 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// use rust_grpc_lib::build_support::Config;
+    ///
     /// let mut config = Config::new();
     /// // Derives Serialize/Deserialize for EVERY message and enum under the package
     /// config = config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
