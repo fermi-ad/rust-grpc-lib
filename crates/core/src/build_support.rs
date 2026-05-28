@@ -329,6 +329,12 @@ impl Config {
     }
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Invoke [`tonic_prost_build::Builder::compile_protos`] on the given proto files.
 ///
 /// # Safety
