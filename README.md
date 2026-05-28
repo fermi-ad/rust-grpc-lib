@@ -34,10 +34,12 @@ rust-grpc-lib = { git = "https://github.com/fermi-ad/rust-grpc-lib", tag = "vX.Y
 Create a `build.rs` at the root of your crate:
 
 ```rust
+use rust_grpc_lib::build_support::{ Config, generate_protos };
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::new(); // Optionally, chain calls here for adding custom attributes.
     // Or, make `config` mutable and add attributes line-by-line. E.g., config = config.type_attribute(...);
-    rust_grpc_lib::build_support::generate_protos(config)?;
+    generate_protos(config)?;
     Ok(())
 }
 ```
