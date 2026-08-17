@@ -16,7 +16,7 @@ jobs:
       contents: write
       pull-requests: write
     with:
-      coverage-exclude: '|integration_tests/.*|tests.rs$'
+      coverage-exclude: '|integration_tests/.*|tests.rs'
       pull-git-submodules: true
       references-internal-git-repo: true
       
