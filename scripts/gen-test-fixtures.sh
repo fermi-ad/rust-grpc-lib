@@ -2,7 +2,7 @@
 # scripts/gen-test-fixtures.sh
 #
 # Generates the Rust proto fixtures used by the integration tests in
-# crates/core/tests/integration_round_trip.rs.
+# crates/integration_tests/src/integration_round_trip.rs.
 #
 # The generated files are committed to the repository so that `cargo test`
 # does not require a build.rs or a live protoc invocation.
@@ -23,9 +23,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CORE_DIR="${WORKSPACE_ROOT}/crates/core"
-FIXTURES_DIR="${CORE_DIR}/tests/fixtures"
-INTERFACE_DIR="${CORE_DIR}/interface-definitions"
+INTEGRATION_TESTS_DIR="${WORKSPACE_ROOT}/crates/integration_tests"
+FIXTURES_DIR="${INTEGRATION_TESTS_DIR}/src/fixtures"
+INTERFACE_DIR="${WORKSPACE_ROOT}/crates/core/interface-definitions"
 
 echo "Workspace root : ${WORKSPACE_ROOT}"
 echo "Fixtures output: ${FIXTURES_DIR}"

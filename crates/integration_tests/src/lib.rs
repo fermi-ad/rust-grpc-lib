@@ -1,3 +1,9 @@
+//! Integration test suite for rust-grpc-lib.
+//!
+//! This file is the single Cargo integration-test entry point.
+//! All test modules are pulled in here so that every dev-dependency is
+//! visible to the whole binary, avoiding `unused_crate_dependencies` warnings.
+
 #[cfg(test)]
 mod grpc_service_macro;
 #[cfg(test)]
@@ -34,5 +40,3 @@ pub mod services {
         ));
     }
 }
-
-fn main() {}
