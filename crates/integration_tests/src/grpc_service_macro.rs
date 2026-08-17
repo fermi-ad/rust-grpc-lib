@@ -24,6 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::{Code, Request, Response, Status};
 
 use rust_grpc_lib::auth::KeycloakClaims;
+use rust_grpc_lib::grpc_service;
 
 // ---------------------------------------------------------------------------
 // Minimal tonic-like service trait and server struct
@@ -43,7 +44,7 @@ struct EchoServer;
 //   2. Returns `Status::internal` if the claims are absent.
 //   3. Returns `Status::permission_denied` if the `"admin"` role is absent.
 //   4. Falls through to the original body otherwise.
-#[rust_grpc_lib::grpc_service]
+#[grpc_service]
 impl EchoService for EchoServer {
     #[roles(any("admin"))]
     async fn echo(&self, request: Request<String>) -> Result<Response<String>, Status> {
@@ -56,7 +57,7 @@ impl EchoService for EchoServer {
 /// Concrete server type that the `all(...)` variant of the macro is applied to.
 struct MultiRoleServer;
 
-#[rust_grpc_lib::grpc_service]
+#[grpc_service]
 impl EchoService for MultiRoleServer {
     #[roles(all("admin", "operator"))]
     async fn echo(&self, request: Request<String>) -> Result<Response<String>, Status> {

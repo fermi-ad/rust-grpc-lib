@@ -127,15 +127,15 @@
 use tonic::service::Interceptor;
 use tonic::transport::Channel;
 
-#[cfg(any(feature = "build", doc, test))]
-pub mod build_support;
-
-pub mod pool;
-
 /// Auth primitives — JWT interceptors, validation layers, and re-exports from
 /// `rust-auth-lib`. Available when the `auth` feature is enabled (the default).
 #[cfg(feature = "auth")]
 pub mod auth;
+
+#[cfg(any(feature = "build", doc, test))]
+pub mod build_support;
+
+pub mod pool;
 
 /// Re-export of the [`GrpcClient`] derive macro so consumers can use
 /// `#[derive(rust_grpc_lib::GrpcClient)]` without adding a separate
@@ -144,7 +144,7 @@ pub use grpc_macro::GrpcClient;
 
 /// Re-export of the `grpc_service` proc macro for annotating gRPC service
 /// implementations with JWT auth wiring.
-#[cfg(feature = "auth")]
+#[cfg(any(feature = "auth", test))]
 pub use grpc_macro::grpc_service;
 
 /// Marker trait for gRPC client types that can be constructed from a [`Channel`].

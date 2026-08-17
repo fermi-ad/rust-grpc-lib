@@ -648,6 +648,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration_tests"
+version = "0.1.0"
+dependencies = [
+ "jsonwebtoken",
+ "prost",
+ "rust-auth-lib",
+ "rust-grpc-lib",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1312,16 +1327,11 @@ name = "rust-grpc-lib"
 version = "4.0.0"
 dependencies = [
  "grpc-macro",
- "jsonwebtoken",
- "prost",
  "protoc-bin-vendored",
  "rust-auth-lib",
  "rust-env-var-lib",
- "serde_json",
  "tokio",
- "tokio-stream",
  "tonic",
- "tonic-prost",
  "tonic-prost-build",
 ]
 

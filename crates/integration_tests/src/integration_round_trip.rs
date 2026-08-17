@@ -37,42 +37,12 @@ use tonic::{Code, Request, Response, Status};
 use rust_grpc_lib::auth::layer::new_jwt_validation_layer;
 use rust_grpc_lib::auth::{StaticKeysValidator, StaticKeysValidatorConfig};
 
-// ---------------------------------------------------------------------------
-// Include the pre-generated proto fixtures.
-//
-// The generated `services.devdb` module references
-// `super::super::super::google::protobuf::Empty`, so we must nest it inside
-// `services::devdb` and expose `google::protobuf` at the crate root level.
-// ---------------------------------------------------------------------------
-
-pub mod google {
-    pub mod protobuf {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/google.protobuf.rs"
-        ));
-    }
-}
-
-pub mod services {
-    pub mod devdb {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/services.devdb.rs"
-        ));
-    }
-}
-
-use services::devdb::{
-    DeviceInfoReply, DeviceList,
-    dev_db_client::DevDbClient,
-    dev_db_server::{DevDb, DevDbServer},
-};
-
 use crate::google::protobuf::Empty;
 use crate::services::devdb::{
-    AlarmInfoReply, AlarmTextIdList, DeviceAlarmTextList, PlotConfig, PlotConfigResult,
-    PlotConfigSpecification, PlotSelector,
+    AlarmInfoReply, AlarmTextIdList, DeviceAlarmTextList, DeviceInfoReply, DeviceList, PlotConfig,
+    PlotConfigResult, PlotConfigSpecification, PlotSelector,
+    dev_db_client::DevDbClient,
+    dev_db_server::{DevDb, DevDbServer},
 };
 
 const TEST_KID: &str = "integration-test-kid";

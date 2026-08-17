@@ -15,7 +15,7 @@ include = [
 
 [features]
 default = ["auth"]
-auth = ["dep:rust-auth-lib", "dep:tokio"]
+auth = ["dep:rust-auth-lib"]
 build = ["dep:protoc-bin-vendored", "dep:tonic-prost-build"]
 jwks-url = ["rust-auth-lib/jwks-url"]
 unauthenticated = []
@@ -27,15 +27,9 @@ protoc-bin-vendored = { version = "3", optional = true }
 rust-env-var-lib = { git = "https://github.com/fermi-ad/rust-env-var-lib", tag = "v1.2.0" }
 tonic = { version = "0.14", features = ["transport"] }
 tonic-prost-build = { version = "0.14", optional = true }
-tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net"] }
-tokio-stream = { version = "0.1", features = ["net"] }
-prost = "0.14"
-tonic-prost = "0.14"
 protoc-bin-vendored = "3"
 tonic-prost-build = "0.14"
-jsonwebtoken = "11"
-serde_json = "1"
 rust-auth-lib = { git = "https://github.com/fermi-ad/rust-auth-lib", tag = "v0.3.0", features = ["test-fixtures"] }
