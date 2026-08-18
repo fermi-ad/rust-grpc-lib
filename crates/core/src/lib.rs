@@ -4,22 +4,23 @@
 //! This library serves three service archetypes:
 //!
 //! - **Middle-layer services** — validate incoming user JWTs with
-//!   [`auth::JwtValidationLayer`], enforce role-based access control via
+//!   [`auth::validator_into_layer`], enforce role-based access control via
 //!   `#[grpc_service]` / `#[roles(...)]`, and forward the upstream token to
-//!   downstream gRPC services using [`auth::ForwardedTokenInterceptor`].
+//!   downstream gRPC services using [`auth::extract_token`] +
+//!   `ClientName::from_endpoint_with_provider`.
 //! - **Edge/hardware services** — authenticate outbound calls with a
 //!   platform-injected token file via [`auth::FileTokenProvider`] and
-//!   [`pool::get`].
-//! - **Test harnesses** — bypass auth entirely with [`pool::get_unauthenticated`]
+//!   `ClientName::from_endpoint_with_provider`.
+//! - **Test harnesses** — bypass auth entirely with `ClientName::from_endpoint`
 //!   (requires the `unauthenticated` feature).
 //!
 //! # Feature flags
 //!
 //! | Feature | Default | Description |
 //! |---|---|---|
-//! | `auth` | ✅ on | Enables JWT auth; [`pool::get`] requires a [`auth::TokenProvider`] |
+//! | `auth` | ✅ on | Enables JWT auth; generated clients gain `from_endpoint_with_provider` |
 //! | `jwks-url` | off | Enables live JWKS rotation via [`auth::JwksValidator`] (opt-in) |
-//! | `unauthenticated` | off | Enables [`pool::get_unauthenticated`] with no auth; for test harnesses only |
+//! | `unauthenticated` | off | Enables `from_endpoint` (no-auth constructor) on generated clients; for test harnesses only |
 //! | `build` | off | Enables proto code-generation helpers ([`build_support`] module) |
 //!
 //! # Code generation is the consumer's responsibility
@@ -52,22 +53,22 @@
 //!
 //! # Quick start — middle-layer service
 //!
-//! After setting up code generation (see above), install [`auth::JwtValidationLayer`]
-//! on your server and use [`pool::get`] with [`auth::ForwardedTokenInterceptor`]
-//! to call downstream services:
+//! After setting up code generation (see above), install the JWT validation layer
+//! on your server and use [`auth::extract_token`] to forward the caller's token
+//! to downstream services:
 //!
 //! ```rust,ignore
 //! use std::sync::Arc;
 //! use rust_grpc_lib::auth::{
 //!     StaticKeysValidator, StaticKeysValidatorConfig,
-//!     JwtValidationLayer, ForwardedTokenInterceptor,
+//!     validator_into_layer, extract_token,
 //! };
 //!
 //! // Reads AUTH_JWKS_FILE or AUTH_PEM_FILE; optionally AUTH_ISSUER
 //! let validator = Arc::new(StaticKeysValidator::new(StaticKeysValidatorConfig::from_env()?)?);
 //!
 //! tonic::transport::Server::builder()
-//!     .layer(JwtValidationLayer::new(validator))
+//!     .layer(validator_into_layer(validator))
 //!     .add_service(MyServiceServer::new(MyService))
 //!     .serve("[::1]:50051".parse()?)
 //!     .await?;
@@ -83,15 +84,16 @@
 //!
 //! // Reads SERVICE_TOKEN_FILE; caches for SERVICE_TOKEN_CACHE_TTL_SECS (default 30 s)
 //! let provider = FileTokenProvider::from_env()?;
-//! let client: MyServiceClient<_> = rust_grpc_lib::pool::get("http://host:50051", provider)?;
+//! // from_endpoint_with_provider is generated on every client by Config::new()
+//! let client = MyServiceClient::from_endpoint_with_provider("http://host:50051", provider)?;
 //! ```
 //!
 //! # Connection pooling
 //!
-//! Channels are keyed by the endpoint string. Calling [`pool::get`] multiple
-//! times with the same endpoint returns clients that share the same underlying
-//! channel. Connections are established lazily on the first RPC, not at the
-//! time [`pool::get`] is called.
+//! Channels are keyed by the endpoint string. Calling
+//! `ClientName::from_endpoint_with_provider` multiple times with the same
+//! endpoint returns clients that share the same underlying channel via
+//! [`pool::get_channel`]. Connections are established lazily on the first RPC.
 //!
 //! # Adding derive macros to generated types
 //!
@@ -123,13 +125,9 @@
 //!
 //! Keepalive pings are also sent while the connection is idle.
 
-#[cfg(feature = "auth")]
-use tonic::service::Interceptor;
-use tonic::transport::Channel;
-
 /// Auth primitives — JWT interceptors, validation layers, and re-exports from
 /// `rust-auth-lib`. Available when the `auth` feature is enabled (the default).
-#[cfg(feature = "auth")]
+#[cfg(any(feature = "auth", doc, test))]
 pub mod auth;
 
 #[cfg(any(feature = "build", doc, test))]
@@ -140,36 +138,13 @@ pub mod pool;
 /// Re-export of the [`GrpcClient`] derive macro so consumers can use
 /// `#[derive(rust_grpc_lib::GrpcClient)]` without adding a separate
 /// dependency on the proc-macro crate.
+#[cfg(any(feature = "auth", doc, test))]
 pub use grpc_macro::GrpcClient;
+
+#[cfg(any(feature = "unauthenticated", doc, test))]
+pub use grpc_macro::GrpcNoAuthClient;
 
 /// Re-export of the `grpc_service` proc macro for annotating gRPC service
 /// implementations with JWT auth wiring.
-#[cfg(any(feature = "auth", test))]
+#[cfg(any(feature = "auth", doc, test))]
 pub use grpc_macro::grpc_service;
-
-/// Marker trait for gRPC client types that can be constructed from a [`Channel`].
-///
-/// All generated tonic service clients implement this trait automatically via
-/// the bundled `#[derive(GrpcClient)]` macro — you do not need to implement it
-/// yourself unless you are wrapping a generated client in your own newtype.
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement `GrpcClient`",
-    label = "`{Self}` is not a generated service client from this library",
-    note = "Client types generated by rust-grpc-lib implement GrpcClient by default. \
-        Manually implement it for your client if it is not from rust-grpc-lib."
-)]
-pub trait GrpcClient: Sized {
-    /// Construct a client from an existing [`Channel`].
-    fn from_channel(channel: Channel) -> Self;
-
-    /// Construct a client from an existing [`Channel`] wrapped with a
-    /// [`Interceptor`].
-    ///
-    /// Used by [`pool::get`] when the `auth` feature is active to attach a
-    /// [`crate::auth::interceptor::ClientJwtInterceptor`] to every outbound
-    /// request.
-    #[cfg(feature = "auth")]
-    fn from_channel_with_interceptor<I>(channel: Channel, interceptor: I) -> Self
-    where
-        I: Interceptor + Send + Sync + 'static;
-}

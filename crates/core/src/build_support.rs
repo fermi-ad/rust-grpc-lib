@@ -137,12 +137,19 @@ pub struct Config {
 
 impl Config {
     pub fn new() -> Self {
-        Config {
-            builder: tonic_prost_build::configure()
-                .emit_rerun_if_changed(true)
-                .compile_well_known_types(true)
-                .client_attribute(".", "#[derive(::rust_grpc_lib::GrpcClient)]"),
+        let mut builder = tonic_prost_build::configure()
+            .emit_rerun_if_changed(true)
+            .compile_well_known_types(true);
+
+        if cfg!(any(feature = "auth", test)) {
+            builder = builder.client_attribute(".", "#[derive(::rust_grpc_lib::GrpcClient)]");
         }
+
+        if cfg!(any(feature = "unauthenticated", test)) {
+            builder = builder.client_attribute(".", "#[derive(::rust_grpc_lib::GrpcNoAuthClient)]");
+        }
+
+        Config { builder }
     }
 
     /// Add an additional attribute to generated gRPC client service structs.

@@ -3,7 +3,7 @@
 A Rust library for building gRPC services in the Controls group. It handles three things so you don't have to:
 
 1. **Proto bundling & code generation** — the `.proto` definitions from [`interface-definitions`](https://github.com/fermi-ad/interface-definitions) are shipped with this library. Call `build_support::generate_protos()` from your `build.rs` and you get fully-typed Rust message and client structs with no manual proto management.
-2. **Connection pooling** — a process-wide pool of lazily-connected channels, keyed by endpoint string. Call `pool::get` anywhere in your code; connections are shared automatically.
+2. **Connection pooling** — a process-wide pool of lazily-connected channels, keyed by endpoint string. Generated client constructors share connections automatically; no manual pool management is required.
 3. **Zero-trust JWT auth** — outbound calls carry a `Bearer` token; inbound calls are validated before reaching your handler. Role-based access control is enforced via the `#[grpc_service]` / `#[roles(...)]` proc-macro attributes.
 
 > **Tokio required.** This library depends on Tonic, which requires a Tokio async runtime. All examples below assume you are inside `#[tokio::main]` or an equivalent async context.
@@ -70,7 +70,7 @@ The `google::protobuf` well-known types (`Timestamp`, `Duration`, `Any`, etc.) a
 ### 4. Get a client
 
 ```rust
-use rust_grpc_lib::{pool, auth::FileTokenProvider};
+use rust_grpc_lib::auth::FileTokenProvider;
 use crate::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
 
 #[tokio::main]
@@ -78,15 +78,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Reads SERVICE_TOKEN_FILE from the environment (see Environment Variables below).
     let provider = FileTokenProvider::from_env()?;
 
-    let client: AlarmCommandsClient<_> =
-        pool::get("http://alarm-commands-host:50051", provider)?;
+    let client = AlarmCommandsClient::from_endpoint_with_provider(
+        "http://alarm-commands-host:50051",
+        provider,
+    )?;
 
     // use client...
     Ok(())
 }
 ```
 
-`pool::get` returns a client backed by a shared, lazily-connected channel. Calling it multiple times with the same endpoint string reuses the same underlying connection.
+`from_endpoint_with_provider` is generated on every client struct by `#[derive(GrpcClient)]`, which `Config::new()` applies automatically. It returns a client backed by a shared, lazily-connected channel. Calling it multiple times with the same endpoint string reuses the same underlying connection.
 
 <<<<<<< HEAD
 ## Available services
@@ -175,7 +177,7 @@ Sits between the edge and the GraphQL gateway. Validates the incoming user JWT, 
 use std::sync::Arc;
 use rust_grpc_lib::auth::{
     StaticKeysValidator, StaticKeysValidatorConfig,
-    JwtValidationLayer, ForwardedTokenInterceptor,
+    validator_into_layer, extract_token,
 };
 
 struct MyDaqService;
@@ -189,9 +191,12 @@ impl Daq for MyDaqService {
         req: Request<GetDataRequest>,
     ) -> Result<Response<GetDataResponse>, Status> {
         // Forward the caller's token to a downstream service.
-        let client: AlarmCommandsClient<_> = rust_grpc_lib::pool::get(
+        // extract_token pulls the Bearer token out of the incoming request
+        // and wraps it as a ForwardedToken, which implements TokenProvider.
+        let provider = extract_token(&req)?;
+        let client = AlarmCommandsClient::from_endpoint_with_provider(
             "http://alarm-host:50051",
-            ForwardedTokenInterceptor::from_request(&req),
+            provider,
         )?;
         todo!()
     }
@@ -214,7 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     tonic::transport::Server::builder()
-        .layer(JwtValidationLayer::new(validator))
+        .layer(validator_into_layer(validator))
         .add_service(DaqServer::new(MyDaqService))
         .serve("[::1]:50051".parse()?)
         .await?;
@@ -235,7 +240,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Reads SERVICE_TOKEN_FILE; caches for SERVICE_TOKEN_CACHE_TTL_SECS (default: 30 s).
     let provider = FileTokenProvider::from_env()?;
 
-    let client: DaqClient<_> = rust_grpc_lib::pool::get("http://daq-host:50051", provider)?;
+    let client = DaqClient::from_endpoint_with_provider("http://daq-host:50051", provider)?;
 
     loop {
         client.send_hardware_data(/* ... */).await?;
@@ -248,13 +253,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The gateway sits at the user-facing edge of the system. It:
 
-- Installs `JwtValidationLayer` on its Tonic server to validate incoming user JWTs before any handler is reached.
-- Uses `ForwardedTokenInterceptor::from_request(&req)` when calling downstream gRPC services, so the validated user JWT is propagated through the entire call chain without re-issuing tokens.
+- Installs `validator_into_layer(validator)` on its Tonic server to validate incoming user JWTs before any handler is reached.
+- Uses `extract_token(&req)` to pull the validated user JWT out of an incoming request, then passes the resulting `ForwardedToken` to `ClientName::from_endpoint_with_provider` when calling downstream gRPC services, so the user identity propagates through the entire call chain without re-issuing tokens.
 - Reads its own service JWT from a platform-injected file via `FileTokenProvider::from_env()` for any service-to-service calls that require a service identity (e.g. publishing to Kafka).
 
 ### Disabling auth (test harnesses only)
 
-Use the `unauthenticated` feature to bypass auth entirely. `pool::get_unauthenticated` is then available and requires no token provider. **Do not use in production.**
+Use the `unauthenticated` feature to bypass auth entirely. When enabled, every generated client struct gains a `from_endpoint` constructor that requires no token provider. **Do not use in production.**
 
 ```toml
 # Cargo.toml
@@ -262,7 +267,7 @@ rust-grpc-lib = { git = "...", tag = "vX.Y.Z", default-features = false, feature
 ```
 
 ```rust
-let client: DaqClient<_> = rust_grpc_lib::pool::get_unauthenticated("http://localhost:50051")?;
+let client = DaqClient::from_endpoint("http://localhost:50051")?;
 ```
 
 ---
@@ -293,7 +298,7 @@ The proto package path (first argument) matches the `package` declaration in the
 
 ### Wrapping a generated client in a newtype
 
-If you wrap a generated client in your own newtype, implement `GrpcClient` with the derive macro so it works with `pool::get`:
+`Config::new()` automatically applies `#[derive(GrpcClient)]` to every generated client struct, so you get `from_endpoint_with_provider` for free on all generated types. If you wrap a generated client in your own newtype, apply the derive to your wrapper so it also gains `from_endpoint_with_provider`:
 
 ```rust
 use rust_grpc_lib::GrpcClient;
@@ -327,9 +332,9 @@ Marker attribute consumed by `#[grpc_service]`. Two variants:
 
 | Feature | Default | Description |
 |---|---|---|
-| `auth` | ✅ on | Enables JWT auth; `pool::get` requires a `TokenProvider` |
+| `auth` | ✅ on | Enables JWT auth; generated clients gain `from_endpoint_with_provider` |
 | `jwks-url` | off | Enables live JWKS endpoint rotation via `JwksValidator` (opt-in; pulls in an HTTP client) |
-| `unauthenticated` | off | Enables `pool::get_unauthenticated` with no auth; for test harnesses only |
+| `unauthenticated` | off | Enables `from_endpoint` (no-auth constructor) on generated clients; for test harnesses only |
 | `build` | off | Enables proto code-generation helpers (`build_support` module) |
 
 ### Environment variables

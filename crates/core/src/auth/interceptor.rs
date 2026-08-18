@@ -1,91 +1,40 @@
 //! gRPC client interceptors for attaching JWT `Authorization` headers to
 //! outbound requests.
 //!
-//! Two interceptors are provided:
-//!
-//! - [`ForwardedTokenInterceptor`] — captures the `Authorization` header from
-//!   an incoming tonic request and re-attaches it to every outbound request.
-//!   Used by middle-layer services to propagate the caller's identity downstream.
 //! - [`ClientJwtInterceptor`] — calls any [`TokenProvider`] on each outbound
 //!   request and attaches the result as a `Bearer` token. Used internally by
-//!   [`crate::pool::get`].
+//!   the `from_endpoint_with_provider` constructors generated on every client
+//!   struct by `#[derive(GrpcClient)]`.
 
-use rust_auth_lib::{TokenError, TokenProvider};
-use tonic::{
-    Request, Status,
-    metadata::{Ascii, MetadataValue},
-    service::Interceptor,
-};
+use rust_auth_lib::TokenProvider;
+use tonic::{Request, Status, service::Interceptor};
 
-#[cfg(test)]
-mod tests;
-
-/// Forwards the `Authorization: Bearer` token from an incoming gRPC request to
-/// all outbound gRPC calls made during the same handler invocation.
+/// Generic interceptor that calls any [`TokenProvider`] and attaches the result
+/// as a `Bearer` token on every outbound gRPC request.
 ///
-/// # Use case — middle-layer services
+/// Used internally by the `from_endpoint_with_provider` constructor that
+/// `#[derive(GrpcClient)]` generates on every client struct; consumers do not
+/// typically construct this directly.
 ///
-/// A middle-layer service receives a validated user JWT from the gateway and
-/// must propagate it to downstream gRPC services so that the full call chain
-/// operates under the same user identity. `ForwardedTokenInterceptor` captures
-/// the `Authorization` header from the incoming [`tonic::Request`] and re-attaches
-/// it to every outbound request made via [`crate::pool::get`].
+/// To forward the caller's token from an incoming request to a downstream
+/// service, use [`crate::auth::extract_token`] to obtain a [`rust_auth_lib::ForwardedToken`]
+/// and pass it as the provider:
 ///
 /// ```rust,ignore
 /// #[rust_grpc_lib::grpc_service]
 /// impl Daq for MyDaqService {
 ///     async fn get_data(&self, req: Request<GetDataRequest>) -> Result<Response<GetDataResponse>, Status> {
-///         let client: AlarmCommandsClient<_> = rust_grpc_lib::pool::get(
+///         let provider = rust_grpc_lib::auth::extract_token(&req)?;
+///         let client = AlarmCommandsClient::from_endpoint_with_provider(
 ///             "http://alarm-host:50051",
-///             ForwardedTokenInterceptor::from_request(&req),
+///             provider,
 ///         )?;
 ///         // ...
 ///     }
 /// }
 /// ```
-///
-/// Also implements [`TokenProvider`] so it can be passed directly to
-/// [`crate::pool::get`].
-pub struct ForwardedTokenInterceptor {
-    token: Option<MetadataValue<Ascii>>,
-}
-
-impl ForwardedTokenInterceptor {
-    /// Construct from the metadata of an incoming tonic request.
-    pub fn from_request<T>(request: &Request<T>) -> Self {
-        Self {
-            token: request.metadata().get("authorization").cloned(),
-        }
-    }
-}
-
-impl Interceptor for ForwardedTokenInterceptor {
-    fn call(&mut self, mut req: Request<()>) -> Result<Request<()>, Status> {
-        if let Some(token) = &self.token {
-            req.metadata_mut().insert("authorization", token.clone());
-        }
-        Ok(req)
-    }
-}
-
-impl TokenProvider for ForwardedTokenInterceptor {
-    fn get_token(&self) -> Result<String, TokenError> {
-        self.token
-            .as_ref()
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.strip_prefix("Bearer "))
-            .map(|s| s.to_owned())
-            .ok_or(TokenError::EmptyAccessToken)
-    }
-}
-
-/// Generic interceptor that calls any [`TokenProvider`] and attaches the result
-/// as a `Bearer` token on every outbound gRPC request.
-///
-/// Used internally by [`crate::pool::get`]; consumers do not typically construct
-/// this directly.
 pub struct ClientJwtInterceptor<P: TokenProvider> {
-    pub(crate) provider: P,
+    pub provider: P,
 }
 
 impl<P: TokenProvider> Interceptor for ClientJwtInterceptor<P> {

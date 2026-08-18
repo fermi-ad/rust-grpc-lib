@@ -2,8 +2,12 @@
 //!
 //! This crate provides two public macros:
 //!
-//! - [`GrpcClient`] — a derive macro that implements the `GrpcClient` trait
-//!   for a tonic client struct, enabling it to be used with `pool::get`.
+//! - [`GrpcClient`] — a derive macro that adds a `from_endpoint_with_provider`
+//!   constructor to a tonic client struct, wiring it into the process-wide
+//!   connection pool with JWT auth.
+//! - [`GrpcNoAuthClient`] — a derive macro that adds a `from_endpoint`
+//!   constructor (no auth) for use in test harnesses (requires the
+//!   `unauthenticated` feature).
 //! - [`grpc_service`] — an attribute macro applied to `impl Trait for Type`
 //!   blocks that injects Keycloak role-checking guards into methods annotated
 //!   with `#[roles(...)]`.
@@ -23,21 +27,6 @@ use syn::{
     parse_macro_input,
 };
 
-/// Derive macro that implements the `GrpcClient` trait for a tonic client struct.
-///
-/// This macro is applied automatically by `rust-grpc-lib`'s build script to every
-/// generated tonic client type, so you will not normally need to use it yourself.
-/// It is re-exported from the main crate as `rust_grpc_lib::GrpcClient` for the
-/// rare case where you need to implement the trait on a custom wrapper type.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use rust_grpc_lib::GrpcClient;
-///
-/// #[derive(GrpcClient)]
-/// pub struct MyServiceClient<T>(inner_client::MyServiceClient<T>);
-/// ```
 #[proc_macro_derive(GrpcClient)]
 pub fn grpc_client_derive(input: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(input as DeriveInput);
@@ -45,26 +34,38 @@ pub fn grpc_client_derive(input: TokenStream) -> TokenStream {
 
     // Use `::rust_grpc_lib` so the impl resolves against the `core` crate when this
     // derive is expanded, not against any re-export in a consuming crate.
-    //
-    // `from_channel_with_interceptor` is gated on the `auth` feature of `rust-grpc-lib`
-    // so that the generated impl compiles in both auth and no-auth configurations.
     let as_grpc_client = quote! {
-        impl ::rust_grpc_lib::GrpcClient for #name<::tonic::transport::Channel> {
-            fn from_channel(ch: ::tonic::transport::Channel) -> Self {
-                <#name<::tonic::transport::Channel>>::new(ch)
-            }
-
-            #[cfg(feature = "auth")]
-            fn from_channel_with_interceptor<I>(
-                ch: ::tonic::transport::Channel,
-                interceptor: I,
-            ) -> Self
-            where
-                I: ::tonic::service::Interceptor + Send + Sync + 'static,
+        impl #name<::tonic::transport::Channel>
+        {
+            pub fn from_endpoint_with_provider<P: ::rust_grpc_lib::auth::TokenProvider>(
+                endpoint: &str,
+                provider: P,
+            ) -> Result<#name<::tonic::service::interceptor::InterceptedService<::tonic::transport::Channel, ::rust_grpc_lib::auth::ClientJwtInterceptor<P>>>, ::tonic::transport::Error>
             {
-                <#name<::tonic::transport::Channel>>::new(
-                    ::tonic::service::interceptor(ch, interceptor),
-                )
+                let channel = ::rust_grpc_lib::pool::get_channel(endpoint)?;
+                Ok(#name::new(::tonic::service::interceptor::InterceptedService::new(channel, ::rust_grpc_lib::auth::ClientJwtInterceptor { provider })))
+            }
+        }
+    };
+    TokenStream::from(as_grpc_client)
+}
+
+#[proc_macro_derive(GrpcNoAuthClient)]
+pub fn grpc_no_auth_client_derive(input: TokenStream) -> TokenStream {
+    let parsed = parse_macro_input!(input as DeriveInput);
+    let name = &parsed.ident;
+
+    // Use `::rust_grpc_lib` so the impl resolves against the `core` crate when this
+    // derive is expanded, not against any re-export in a consuming crate.
+    let as_grpc_client = quote! {
+        impl #name<::tonic::transport::Channel>
+        {
+            pub fn from_endpoint(
+                endpoint: &str,
+            ) -> Result<Self, ::tonic::transport::Error>
+            {
+                let channel = ::rust_grpc_lib::pool::get_channel(endpoint)?;
+                Ok(#name::new(channel))
             }
         }
     };

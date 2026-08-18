@@ -80,6 +80,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // type bundled with tonic-prost-build).
     tonic_prost_build::configure()
         .compile_well_known_types(true)
+        .client_attribute(".", "#[derive(::rust_grpc_lib::GrpcClient)]")
+        .client_attribute(".", "#[derive(::rust_grpc_lib::GrpcNoAuthClient)]")
         .out_dir(&out_dir)
         .compile_protos(
             &[proto_dir.join("controls/service/DevDB/v1/DevDB.proto")],

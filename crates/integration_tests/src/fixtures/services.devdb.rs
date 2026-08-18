@@ -287,6 +287,8 @@ pub mod dev_db_client {
     )]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
+    #[derive(::rust_grpc_lib::GrpcClient)]
+    #[derive(::rust_grpc_lib::GrpcNoAuthClient)]
     #[derive(Debug, Clone)]
     pub struct DevDbClient<T> {
         inner: tonic::client::Grpc<T>,

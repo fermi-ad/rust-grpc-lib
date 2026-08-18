@@ -13,10 +13,12 @@
 //!   `rust-auth-lib`'s `jwks-local` implementation)
 //! - **Error types** — [`AuthError`], [`ConfigError`], [`TokenError`]
 //! - **Keycloak claims** — [`keycloak::KeycloakClaims`]
-//! - **gRPC interceptors** — [`interceptor::ForwardedTokenInterceptor`],
-//!   [`interceptor::ClientJwtInterceptor`]
-//! - **Server layer** — [`layer::JwtValidationLayer`], [`layer::JwtValidationService`],
-//!   [`layer::new_jwt_validation_layer`]
+//! - **gRPC interceptors** — [`interceptor::ClientJwtInterceptor`] (used
+//!   internally by the generated `from_endpoint_with_provider` constructors)
+//! - **Server layer** — [`layer::JwtValidationLayer`] (type alias),
+//!   [`layer::JwtValidationService`], [`validator_into_layer`] (constructor)
+//! - **Token extraction** — [`extract_token`] (pulls a `Bearer` token out of an
+//!   incoming tonic request and returns it as a [`ForwardedToken`])
 //!
 //! # What is intentionally omitted
 //!
@@ -59,5 +61,20 @@ pub use rust_auth_lib::JwksValidator;
 pub use rust_auth_lib::JwksValidatorConfig;
 
 // gRPC-specific types from submodules
-pub use interceptor::{ClientJwtInterceptor, ForwardedTokenInterceptor};
-pub use layer::{JwtValidationLayer, JwtValidationService, new_jwt_validation_layer};
+pub use interceptor::ClientJwtInterceptor;
+pub use layer::{JwtValidationLayer, validator_into_layer};
+use tonic::Request;
+
+#[cfg(test)]
+mod tests;
+
+/// Construct from the metadata of an incoming tonic request.
+pub fn extract_token<T>(request: &Request<T>) -> Result<ForwardedToken, TokenError> {
+    request
+        .metadata()
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(ForwardedToken::new)
+        .ok_or(TokenError::EmptyAccessToken)
+}

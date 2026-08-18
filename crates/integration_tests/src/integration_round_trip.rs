@@ -24,18 +24,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 extern crate prost;
 
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use rust_auth_lib::test_fixtures;
+use rust_auth_lib::{ForwardedToken, test_fixtures};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::time::sleep;
 use tokio_stream::wrappers::TcpListenerStream;
-use tonic::service::Interceptor;
-use tonic::service::interceptor::InterceptedService;
-use tonic::transport::{Channel, Server};
+use tonic::transport::Server;
 use tonic::{Code, Request, Response, Status};
 
-use rust_grpc_lib::auth::layer::new_jwt_validation_layer;
-use rust_grpc_lib::auth::{StaticKeysValidator, StaticKeysValidatorConfig};
+use rust_grpc_lib::auth::{StaticKeysValidator, StaticKeysValidatorConfig, validator_into_layer};
 
 use crate::google::protobuf::Empty;
 use crate::services::devdb::{
@@ -167,7 +164,7 @@ async fn start_server() -> (SocketAddr, oneshot::Sender<()>) {
     let addr = listener.local_addr().expect("must have local addr");
 
     let validator = make_validator();
-    let auth_layer = new_jwt_validation_layer(validator);
+    let auth_layer = validator_into_layer(validator);
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
@@ -190,29 +187,6 @@ async fn start_server() -> (SocketAddr, oneshot::Sender<()>) {
     (addr, shutdown_tx)
 }
 
-/// Build a `DevDbClient` that optionally attaches a Bearer token.
-async fn make_client(
-    addr: SocketAddr,
-    bearer_token: Option<String>,
-) -> DevDbClient<InterceptedService<Channel, impl Interceptor>> {
-    let endpoint = format!("http://{addr}");
-    let channel = Channel::from_shared(endpoint)
-        .expect("valid endpoint URI")
-        .connect()
-        .await
-        .expect("channel connect must succeed");
-
-    let token = bearer_token.unwrap_or_default();
-    DevDbClient::with_interceptor(channel, move |mut req: Request<()>| {
-        if !token.is_empty() {
-            let bearer = format!("Bearer {token}");
-            req.metadata_mut()
-                .insert("authorization", bearer.parse().unwrap());
-        }
-        Ok(req)
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Test 1: valid operator JWT → RPC succeeds
 // ---------------------------------------------------------------------------
@@ -220,9 +194,12 @@ async fn make_client(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn full_round_trip_with_valid_operator_jwt_succeeds() {
     let (addr, _shutdown) = start_server().await;
+    let endpoint = format!("http://{addr}");
 
     let operator_jwt = make_jwt(&["operator"]);
-    let mut client = make_client(addr, Some(operator_jwt)).await;
+    let mut client =
+        DevDbClient::from_endpoint_with_provider(&endpoint, ForwardedToken::new(operator_jwt))
+            .unwrap();
 
     let response = client
         .get_device_info(DeviceList {
@@ -245,10 +222,13 @@ async fn full_round_trip_with_valid_operator_jwt_succeeds() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn full_round_trip_with_wrong_role_returns_permission_denied() {
     let (addr, _shutdown) = start_server().await;
+    let endpoint = format!("http://{addr}");
 
     // "viewer" is not "operator" — the role check must reject this.
     let viewer_jwt = make_jwt(&["viewer"]);
-    let mut client = make_client(addr, Some(viewer_jwt)).await;
+    let mut client =
+        DevDbClient::from_endpoint_with_provider(&endpoint, ForwardedToken::new(viewer_jwt))
+            .unwrap();
 
     let err = client
         .get_device_info(DeviceList {
@@ -271,10 +251,40 @@ async fn full_round_trip_with_wrong_role_returns_permission_denied() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn full_round_trip_with_no_token_returns_unauthenticated() {
     let (addr, _shutdown) = start_server().await;
+    let endpoint = format!("http://{addr}");
 
     // No token — JwtValidationLayer must reject the request before it reaches
     // the handler.
-    let mut client = make_client(addr, None).await;
+    let mut client =
+        DevDbClient::from_endpoint_with_provider(&endpoint, ForwardedToken::new(String::new()))
+            .unwrap();
+
+    let err = client
+        .get_device_info(DeviceList {
+            device: vec!["M:OUTTMP".to_string()],
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.code(),
+        Code::Unauthenticated,
+        "status must be UNAUTHENTICATED when the Authorization header is missing"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: no Authorization header → unauthenticated with "unauthenticated" feature
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_round_trip_with_no_auth_header_returns_unauthenticated() {
+    let (addr, _shutdown) = start_server().await;
+    let endpoint = format!("http://{addr}");
+
+    // No token — JwtValidationLayer must reject the request before it reaches
+    // the handler.
+    let mut client = DevDbClient::from_endpoint(&endpoint).unwrap();
 
     let err = client
         .get_device_info(DeviceList {

@@ -4,17 +4,34 @@
 //! exists for a given endpoint, all subsequent calls with that endpoint reuse
 //! it. The pool is safe to use from multiple threads.
 //!
+//! # Public entry point
+//!
+//! [`get_channel`] is the only public function in this module. It returns a
+//! [`tonic::transport::Channel`] for the given endpoint, creating and caching
+//! one if none exists yet.
+//!
+//! Consumers do not typically call [`get_channel`] directly. Instead, the
+//! `from_endpoint_with_provider` and `from_endpoint` constructors generated on
+//! every client struct by `#[derive(GrpcClient)]` / `#[derive(GrpcNoAuthClient)]`
+//! call it internally.
+//!
 //! # Tokio runtime requirement
 //!
 //! This module requires a [Tokio](https://tokio.rs) runtime. Tonic's transport
 //! layer is built on Tokio and there is no way to use it without one.
 //!
 //! ```rust,ignore
-//! use rust_grpc_lib::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
+//! // Typical usage — via the generated constructor, not get_channel directly:
+//! use crate::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
+//! use rust_grpc_lib::auth::FileTokenProvider;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), tonic::transport::Error> {
-//!     let client: AlarmCommandsClient<_> = rust_grpc_lib::pool::get("http://alarm-host:50051")?;
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let provider = FileTokenProvider::from_env()?;
+//!     let client = AlarmCommandsClient::from_endpoint_with_provider(
+//!         "http://alarm-host:50051",
+//!         provider,
+//!     )?;
 //!     Ok(())
 //! }
 //! ```
@@ -28,13 +45,6 @@ use std::{
 use rust_env_var_lib::env_var;
 use tonic::transport::{Channel, Endpoint, Error};
 
-use crate::GrpcClient;
-
-#[cfg(feature = "auth")]
-use crate::auth::TokenProvider;
-#[cfg(feature = "auth")]
-use crate::auth::interceptor::ClientJwtInterceptor;
-
 #[cfg(test)]
 mod tests;
 
@@ -47,99 +57,8 @@ const KEEP_ALIVE_TIMEOUT_DEFAULT: u64 = 10;
 
 static POOL: LazyLock<ChannelMap> = LazyLock::new(RwLock::default);
 
-/// Return a gRPC client connected to `endpoint`, reusing an existing channel
-/// if one has already been created for that endpoint.
-///
-/// The channel is connected lazily: no network activity occurs until the first
-/// RPC is made on the returned client.
-///
-/// This function requires that you are already inside a Tokio runtime (e.g. inside
-/// `#[tokio::main]` or an async service). If you are outside a Tokio runtime, the
-/// call will panic.
-///
-/// # Type parameters
-///
-/// - `C` must implement [`GrpcClient`]. All generated tonic service clients in
-///   this library implement [`GrpcClient`] automatically.
-/// - `P` must implement [`TokenProvider`]. The provider is called on every
-///   outbound request to attach a `Bearer` token via
-///   [`crate::auth::interceptor::ClientJwtInterceptor`].
-///
-/// # Errors
-///
-/// Returns [`tonic::transport::Error`] if `endpoint` is not a valid URI.
-///
-/// # Panics
-///
-/// Panics if called outside of a Tokio runtime context.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use rust_grpc_lib::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
-/// use rust_grpc_lib::auth::FileTokenProvider;
-///
-/// #[tokio::main]
-/// async fn main() -> Result<(), tonic::transport::Error> {
-///     let provider = FileTokenProvider::from_env()?;
-///     let client: AlarmCommandsClient<_> =
-///         rust_grpc_lib::pool::get("http://alarm-host:50051", provider)?;
-///     Ok(())
-/// }
-/// ```
-#[cfg(feature = "auth")]
-pub fn get<C: GrpcClient, P: TokenProvider>(endpoint: &str, provider: P) -> Result<C, Error> {
-    let channel = get_or_create_channel(endpoint, &POOL)?;
-    Ok(C::from_channel_with_interceptor(
-        channel,
-        ClientJwtInterceptor { provider },
-    ))
-}
-
-/// Return an **unauthenticated** gRPC client connected to `endpoint`, bypassing
-/// JWT auth entirely.
-///
-/// Only available when the `unauthenticated` feature is enabled. Intended for local
-/// development, integration tests, or environments where zero-trust auth is not
-/// required. **Do not use in production.**
-///
-/// The channel is connected lazily: no network activity occurs until the first
-/// RPC is made on the returned client.
-///
-/// This function requires that you are already inside a Tokio runtime (e.g. inside
-/// `#[tokio::main]` or an async service). If you are outside a Tokio runtime, the
-/// call will panic.
-///
-/// # Type parameter
-///
-/// `C` must implement [`GrpcClient`]. All generated tonic service clients in
-/// this library implement [`GrpcClient`] automatically.
-///
-/// # Errors
-///
-/// Returns [`tonic::transport::Error`] if `endpoint` is not a valid URI.
-///
-/// # Panics
-///
-/// Panics if called outside of a Tokio runtime context.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use rust_grpc_lib::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
-///
-/// #[tokio::main]
-/// async fn main() -> Result<(), tonic::transport::Error> {
-///     // Only available with the `unauthenticated` feature enabled.
-///     let client: AlarmCommandsClient<_> =
-///         rust_grpc_lib::pool::get_unauthenticated("http://alarm-host:50051")?;
-///     Ok(())
-/// }
-/// ```
-#[cfg(feature = "unauthenticated")]
-pub fn get_unauthenticated<C: GrpcClient>(endpoint: &str) -> Result<C, Error> {
-    let channel = get_or_create_channel(endpoint, &POOL)?;
-    Ok(C::from_channel(channel))
+pub fn get_channel(endpoint: &str) -> Result<Channel, Error> {
+    get_or_create_channel(endpoint, &POOL)
 }
 
 /// Look up an existing channel for `endpoint` in the pool, or create and

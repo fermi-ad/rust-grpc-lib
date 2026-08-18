@@ -5,7 +5,7 @@ edition = "2024"
 publish = false # Prevent accidental publishing to crates.io
 
 [dev-dependencies]
-rust-grpc-lib = { path = "../core" }
+rust-grpc-lib = { path = "../core", features = ["unauthenticated"] }
 jsonwebtoken = "11"
 prost = "0.14"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net"] }

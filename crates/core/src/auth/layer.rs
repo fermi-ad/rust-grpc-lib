@@ -29,15 +29,14 @@ mod tests;
 ///
 /// `JwtValidationLayer` is a type alias for
 /// `tonic::service::InterceptorLayer<JwtValidationService<V>>`. Because it is
-/// a type alias, use the free function [`new_jwt_validation_layer`] to
-/// construct it.
+/// a type alias, use the free function [`validator_into_layer`] to construct it.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// use std::sync::Arc;
 /// use rust_grpc_lib::auth::{
-///     new_jwt_validation_layer, StaticKeysValidator, StaticKeysValidatorConfig,
+///     validator_into_layer, StaticKeysValidator, StaticKeysValidatorConfig,
 /// };
 ///
 /// #[tokio::main]
@@ -46,7 +45,7 @@ mod tests;
 ///     let validator = Arc::new(StaticKeysValidator::new(StaticKeysValidatorConfig::from_env()?)?);
 ///
 ///     tonic::transport::Server::builder()
-///         .layer(new_jwt_validation_layer(validator))
+///         .layer(validator_into_layer(validator))
 ///         .add_service(MyServiceServer::new(MyService))
 ///         .serve("[::1]:50051".parse()?)
 ///         .await?;
@@ -56,18 +55,8 @@ mod tests;
 /// ```
 pub type JwtValidationLayer<V> = InterceptorLayer<JwtValidationService<V>>;
 
-/// Construct a [`JwtValidationLayer`] from the given validator.
-///
-/// This is a free function rather than an inherent `impl` because
-/// [`JwtValidationLayer`] is a type alias for a tonic type and cannot have
-/// methods added to it directly.
-///
-/// See [`JwtValidationLayer`] for a full usage example.
-pub fn new_jwt_validation_layer<V>(validator: Arc<V>) -> JwtValidationLayer<V>
-where
-    V: TokenValidator + Send + Sync + 'static,
-{
-    InterceptorLayer::new(JwtValidationService::new(validator))
+pub fn validator_into_layer<V: TokenValidator>(validator: Arc<V>) -> JwtValidationLayer<V> {
+    InterceptorLayer::new(JwtValidationService { validator })
 }
 
 /// The server-side interceptor that validates `Authorization: Bearer <token>` on
@@ -75,7 +64,7 @@ where
 ///
 /// `JwtValidationService` is the inner interceptor type used by
 /// [`JwtValidationLayer`]. You do not typically construct it directly; use
-/// [`new_jwt_validation_layer`] or [`JwtValidationLayer::new`] instead.
+/// [`validator_into_layer`] instead.
 ///
 /// On success, the validated [`KeycloakClaims`] are inserted into the request's
 /// extensions so that handler methods can retrieve them:
@@ -91,22 +80,9 @@ where
 /// On failure (missing header, expired token, wrong issuer, bad signature),
 /// returns [`tonic::Status::unauthenticated`] immediately, which tonic converts
 /// into a proper gRPC error response before the handler is ever called.
-///
-/// Because tonic's [`Interceptor`](tonic::service::Interceptor) trait is synchronous,
-/// the async `validate` call is driven to completion with
-/// [`tokio::task::block_in_place`]. This is safe when the validator's hot path is
-/// cheap (e.g. a cached key lookup) and the caller is already inside a
-/// multi-threaded Tokio runtime.
 #[derive(Clone)]
 pub struct JwtValidationService<V> {
     validator: Arc<V>,
-}
-
-impl<V: TokenValidator> JwtValidationService<V> {
-    /// Create a new interceptor wrapping the given validator.
-    pub fn new(validator: Arc<V>) -> Self {
-        Self { validator }
-    }
 }
 
 impl<V: TokenValidator + Send + Sync + 'static> Interceptor for JwtValidationService<V> {

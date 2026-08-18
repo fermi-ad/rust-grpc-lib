@@ -13,7 +13,9 @@ fn make_service(kid: &str) -> JwtValidationService<StaticKeysValidator> {
     let jwks = test_fixtures::make_jwks_json_str(kid);
     let config = StaticKeysValidatorConfig::from_jwks_str(&jwks);
     let validator = StaticKeysValidator::new(config).expect("validator construction must succeed");
-    JwtValidationService::new(Arc::new(validator))
+    JwtValidationService {
+        validator: Arc::new(validator),
+    }
 }
 
 // -----------------------------------------------------------------------
