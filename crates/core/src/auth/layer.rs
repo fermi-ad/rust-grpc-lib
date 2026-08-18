@@ -14,10 +14,10 @@
 //! `request.extensions().get::<KeycloakClaims>()`. On failure the request is
 //! rejected with [`tonic::Code::Unauthenticated`] before reaching any handler.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
-use rust_auth_lib::TokenValidator;
-use rust_auth_lib::keycloak::KeycloakClaims;
+use rust_auth_lib::{Claims, TokenValidator};
 use tonic::{
     Request, Status,
     service::{Interceptor, InterceptorLayer},
@@ -42,7 +42,7 @@ mod tests;
 /// ```rust,ignore
 /// use std::sync::Arc;
 /// use rust_grpc_lib::auth::{
-///     validator_into_layer, StaticKeysValidator, StaticKeysValidatorConfig,
+///     validator_into_layer, KeycloakClaims, StaticKeysValidator, StaticKeysValidatorConfig,
 /// };
 ///
 /// #[tokio::main]
@@ -51,7 +51,7 @@ mod tests;
 ///     let validator = Arc::new(StaticKeysValidator::new(StaticKeysValidatorConfig::from_env()?)?);
 ///
 ///     tonic::transport::Server::builder()
-///         .layer(validator_into_layer(validator))
+///         .layer(validator_into_layer::<KeycloakClaims, _>(validator))
 ///         .add_service(MyServiceServer::new(MyService))
 ///         .serve("[::1]:50051".parse()?)
 ///         .await?;
@@ -59,10 +59,15 @@ mod tests;
 ///     Ok(())
 /// }
 /// ```
-pub type JwtValidationLayer<V> = InterceptorLayer<JwtValidationService<V>>;
+pub type JwtValidationLayer<C, V> = InterceptorLayer<JwtValidationService<C, V>>;
 
-pub fn validator_into_layer<V: TokenValidator>(validator: Arc<V>) -> JwtValidationLayer<V> {
-    InterceptorLayer::new(JwtValidationService { validator })
+pub fn validator_into_layer<C: Claims, V: TokenValidator>(
+    validator: Arc<V>,
+) -> JwtValidationLayer<C, V> {
+    InterceptorLayer::new(JwtValidationService {
+        _claims: PhantomData,
+        validator,
+    })
 }
 
 /// The server-side interceptor that validates `Authorization: Bearer <token>` on
@@ -87,11 +92,14 @@ pub fn validator_into_layer<V: TokenValidator>(validator: Arc<V>) -> JwtValidati
 /// returns [`tonic::Status::unauthenticated`] immediately, which tonic converts
 /// into a proper gRPC error response before the handler is ever called.
 #[derive(Clone)]
-pub struct JwtValidationService<V> {
+pub struct JwtValidationService<C, V> {
+    _claims: PhantomData<C>,
     validator: Arc<V>,
 }
 
-impl<V: TokenValidator + Send + Sync + 'static> Interceptor for JwtValidationService<V> {
+impl<C: Claims + Clone, V: TokenValidator + Send + Sync + 'static> Interceptor
+    for JwtValidationService<C, V>
+{
     fn call(&mut self, mut req: Request<()>) -> Result<Request<()>, Status> {
         // Extract the Bearer token from the Authorization metadata entry.
         let token = req
@@ -112,7 +120,7 @@ impl<V: TokenValidator + Send + Sync + 'static> Interceptor for JwtValidationSer
         // block_in_place so we don't block the executor thread.
         let claims = self
             .validator
-            .validate::<KeycloakClaims>(&token)
+            .validate::<C>(&token)
             .map_err(|e| Status::unauthenticated(e.to_string()))?;
 
         req.extensions_mut().insert(claims);

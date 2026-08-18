@@ -33,7 +33,13 @@ use tonic::{Request, Status, service::Interceptor};
 /// }
 /// ```
 pub struct ClientJwtInterceptor<P: TokenProvider> {
-    pub provider: P,
+    provider: P,
+}
+
+impl<P: TokenProvider> ClientJwtInterceptor<P> {
+    pub fn new(provider: P) -> Self {
+        Self { provider }
+    }
 }
 
 impl<P: TokenProvider> Interceptor for ClientJwtInterceptor<P> {
@@ -43,8 +49,12 @@ impl<P: TokenProvider> Interceptor for ClientJwtInterceptor<P> {
             .get_token()
             .map_err(|e| Status::unauthenticated(e.to_string()))?;
 
-        req.metadata_mut()
-            .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        req.metadata_mut().insert(
+            "authorization",
+            format!("Bearer {token}").parse().map_err(|e| {
+                Status::internal(format!("token contains invalid header characters: {e}"))
+            })?,
+        );
         Ok(req)
     }
 }

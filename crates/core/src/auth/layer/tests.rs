@@ -7,15 +7,18 @@ use super::*;
 
 use std::sync::Arc;
 
-use rust_auth_lib::{Claims, StaticKeysValidator, StaticKeysValidatorConfig, test_fixtures};
+use rust_auth_lib::{
+    Claims, StaticKeysValidator, StaticKeysValidatorConfig, keycloak::KeycloakClaims, test_fixtures,
+};
 use tonic::Code;
 
 /// Build a `JwtValidationService` backed by an in-memory JWKS.
-fn make_service(kid: &str) -> JwtValidationService<StaticKeysValidator> {
+fn make_service(kid: &str) -> JwtValidationService<KeycloakClaims, StaticKeysValidator> {
     let jwks = test_fixtures::make_jwks_json_str(kid);
     let config = StaticKeysValidatorConfig::from_jwks_str(&jwks);
     let validator = StaticKeysValidator::new(config).expect("validator construction must succeed");
     JwtValidationService {
+        _claims: PhantomData,
         validator: Arc::new(validator),
     }
 }

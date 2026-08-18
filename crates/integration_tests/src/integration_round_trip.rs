@@ -32,7 +32,9 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tonic::{Code, Request, Response, Status};
 
-use rust_grpc_lib::auth::{StaticKeysValidator, StaticKeysValidatorConfig, validator_into_layer};
+use rust_grpc_lib::auth::{
+    KeycloakClaims, StaticKeysValidator, StaticKeysValidatorConfig, validator_into_layer,
+};
 
 use crate::services::example::{
     IdList, ReplyOne, ReplyTwo,
@@ -122,7 +124,7 @@ async fn start_server() -> (SocketAddr, oneshot::Sender<()>) {
     let addr = listener.local_addr().expect("must have local addr");
 
     let validator = make_validator();
-    let auth_layer = validator_into_layer(validator);
+    let auth_layer = validator_into_layer::<KeycloakClaims, _>(validator);
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 

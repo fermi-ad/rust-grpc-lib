@@ -46,7 +46,7 @@ pub fn grpc_client_derive(input: TokenStream) -> TokenStream {
             ) -> Result<#name<::tonic::service::interceptor::InterceptedService<::tonic::transport::Channel, ::rust_grpc_lib::auth::ClientJwtInterceptor<P>>>, ::tonic::transport::Error>
             {
                 let channel = ::rust_grpc_lib::pool::get_channel(endpoint)?;
-                Ok(#name::new(::tonic::service::interceptor::InterceptedService::new(channel, ::rust_grpc_lib::auth::ClientJwtInterceptor { provider })))
+                Ok(#name::new(::tonic::service::interceptor::InterceptedService::new(channel, ::rust_grpc_lib::auth::ClientJwtInterceptor::new(provider))))
             }
         }
     };
