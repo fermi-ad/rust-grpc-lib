@@ -1,4 +1,13 @@
-//! File-system helpers: proto file discovery and package-name extraction.
+//! File-system helpers used by [`super::generate_protos`].
+//!
+//! Defines three `pub(super)` functions:
+//!
+//! - [`find_proto_files`] — recursively collects all `.proto` file paths
+//!   under a directory.
+//! - [`collect_packages`] — reads the `package` declaration from each file
+//!   and returns a sorted list of package names.
+//! - `extract_package` (private) — parses a single `package …;` line from
+//!   proto file text.
 
 use std::{
     ffi::OsStr,

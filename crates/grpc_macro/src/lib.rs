@@ -1,18 +1,21 @@
 //! Procedural macros for `rust-grpc-lib`.
 //!
-//! This crate provides two public macros:
+//! This crate exposes four public macros:
 //!
-//! - [`GrpcClient`] — a derive macro that adds a `from_endpoint_with_provider`
-//!   constructor to a tonic client struct, wiring it into the process-wide
-//!   connection pool with JWT auth.
-//! - [`GrpcNoAuthClient`] — a derive macro that adds a `from_endpoint`
-//!   constructor (no auth) for use in test harnesses (requires the
-//!   `unauthenticated` feature).
-//! - [`grpc_service`] — an attribute macro applied to `impl Trait for Type`
-//!   blocks that injects Keycloak role-checking guards into methods annotated
+//! - [`GrpcClient`] — derive macro that generates
+//!   `from_endpoint_with_provider` on a tonic client struct, wiring it into
+//!   the process-wide channel pool with JWT auth via `ClientJwtInterceptor`.
+//! - [`GrpcNoAuthClient`] — derive macro that generates `from_endpoint` (no
+//!   auth) on a tonic client struct. For test harnesses only; requires the
+//!   `unauthenticated` feature on `rust-grpc-lib`.
+//! - [`grpc_service`] — attribute macro applied to an `impl Trait for Type`
+//!   block that injects Keycloak role-checking guards into methods annotated
 //!   with `#[roles(...)]`.
-//! - [`roles`] — a marker attribute consumed by [`grpc_service`]; a no-op
-//!   when used without it.
+//! - [`roles`] — marker attribute consumed by [`grpc_service`]. A pass-through
+//!   no-op when used without `#[grpc_service]` on the enclosing `impl` block.
+//!
+//! Internal helpers (`RolesSpec`, `RolesArgs`, `extract_roles_attr`,
+//! `first_param_ident`, `build_guard`) are private to this crate.
 
 use std::{iter, mem::take};
 

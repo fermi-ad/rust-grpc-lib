@@ -1,7 +1,15 @@
 //! Build-time helpers for compiling the bundled `.proto` definitions into Rust.
 //!
-//! The public entry point is [`generate_protos`], which consumers call from
-//! their own `build.rs`.
+//! Two public items are defined here:
+//!
+//! - [`generate_protos`] — the single function consumers call from their
+//!   `build.rs`. It discovers all `.proto` files shipped with this crate,
+//!   compiles them with `tonic-prost-build`, and writes `proto.rs` into
+//!   `OUT_DIR`.
+//! - [`Config`] — a builder that wraps `tonic_prost_build::Builder` and
+//!   exposes attribute-injection methods for customising the generated code.
+//!
+//! Private helpers live in the [`file_utils`] and [`proto_rs`] sub-modules.
 
 use std::{env, error::Error, ffi::OsStr, fs, path::Path};
 
@@ -136,6 +144,19 @@ pub struct Config {
 }
 
 impl Config {
+    /// Create a default [`Config`].
+    ///
+    /// Applies the following baseline settings to the underlying
+    /// `tonic_prost_build::Builder`:
+    ///
+    /// - `emit_rerun_if_changed(true)` — Cargo will re-run `build.rs` when
+    ///   any `.proto` file changes.
+    /// - `compile_well_known_types(true)` — generates `google.protobuf.*`
+    ///   types alongside the service types.
+    /// - `#[derive(::rust_grpc_lib::GrpcClient)]` on every client struct —
+    ///   when the `auth` feature is enabled (the default).
+    /// - `#[derive(::rust_grpc_lib::GrpcNoAuthClient)]` on every client
+    ///   struct — when the `unauthenticated` feature is enabled.
     pub fn new() -> Self {
         let mut builder = tonic_prost_build::configure()
             .emit_rerun_if_changed(true)

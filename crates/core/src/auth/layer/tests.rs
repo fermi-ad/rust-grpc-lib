@@ -1,5 +1,7 @@
-//! Tests for `JwtValidationService` — covers missing headers, invalid tokens,
-//! and successful validation with claims insertion.
+//! Tests for [`super::JwtValidationService`].
+//!
+//! Covers: missing `Authorization` header, invalid JWT, and a valid JWT that
+//! results in [`super::KeycloakClaims`] being inserted into request extensions.
 
 use super::*;
 

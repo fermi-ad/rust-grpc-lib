@@ -1,4 +1,7 @@
-//! Tests for the connection pool — covers channel creation, reuse, and error handling.
+//! Tests for [`super::get_or_create_channel`].
+//!
+//! Covers: valid endpoint, invalid URI, same-endpoint channel reuse, distinct
+//! endpoints getting distinct channels, and pool insertion.
 
 use super::*;
 

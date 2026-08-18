@@ -1,21 +1,21 @@
 //! Full client→server gRPC round-trip integration tests.
 //!
-//! These tests spin up a real tonic server on a loopback TCP port, connect a
-//! real tonic client, and exercise the complete auth path:
+//! Each test spins up a real tonic server on a loopback TCP port, connects a
+//! real tonic client, and exercises the complete auth path:
 //!
-//!   gRPC client  →  Authorization: Bearer <JWT>
-//!   JwtValidationLayer  →  validates RS256 token, inserts KeycloakClaims
-//!   #[grpc_service] + #[roles(any("operator"))]  →  role check
-//!   handler  →  returns Ok or permission_denied
+//! ```text
+//! gRPC client  →  Authorization: Bearer <JWT>
+//! JwtValidationLayer  →  validates RS256 token, inserts KeycloakClaims
+//! #[grpc_service] + #[roles(any("operator"))]  →  role check
+//! handler  →  returns Ok or permission_denied
+//! ```
 //!
-//! The service used is the real `DevDB` gRPC service generated from the
-//! bundled `DevDB.proto` definition. The generated Rust source is committed
-//! to `tests/fixtures/` so no build.rs or live protoc invocation is needed
-//! at test time.
+//! The service under test is `ExampleDB`, generated from the fixture file at
+//! `src/fixtures/services.example.rs` (committed to the repository so that
+//! `cargo test` requires no `build.rs` or live `protoc` invocation).
 //!
-//! If the `interface-definitions` submodule is updated, re-run:
-//!   bash scripts/gen-test-fixtures.sh
-//! and commit the regenerated files.
+//! To regenerate the fixtures after updating the `interface-definitions`
+//! submodule, run `bash scripts/gen-test-fixtures.sh`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,12 +34,10 @@ use tonic::{Code, Request, Response, Status};
 
 use rust_grpc_lib::auth::{StaticKeysValidator, StaticKeysValidatorConfig, validator_into_layer};
 
-use crate::google::protobuf::Empty;
-use crate::services::devdb::{
-    AlarmInfoReply, AlarmTextIdList, DeviceAlarmTextList, DeviceInfoReply, DeviceList, PlotConfig,
-    PlotConfigResult, PlotConfigSpecification, PlotSelector,
-    dev_db_client::DevDbClient,
-    dev_db_server::{DevDb, DevDbServer},
+use crate::services::example::{
+    IdList, ReplyOne, ReplyTwo,
+    example_db_client::ExampleDbClient,
+    example_db_server::{ExampleDb, ExampleDbServer},
 };
 
 const TEST_KID: &str = "integration-test-kid";
@@ -80,75 +78,35 @@ fn make_validator() -> Arc<StaticKeysValidator> {
 }
 
 // ---------------------------------------------------------------------------
-// Stub DevDB server implementation
+// Stub ExampleDB server implementation
 //
-// We implement the generated `DevDb` trait on a unit struct. Only
-// `get_device_info` is gated with `#[roles(any("operator"))]`; the other
-// methods return `unimplemented` — they are never called by these tests.
+// We implement the generated `ExampleDb` trait on a unit struct. Only
+// `get_end_point_one` is gated with `#[roles(any("operator"))]`; the other
+// method returns `unimplemented` — it is never called by these tests.
 // ---------------------------------------------------------------------------
 
-struct StubDevDb;
+struct StubExampleDb;
 
 #[rust_grpc_lib::grpc_service]
 #[tonic::async_trait]
-impl DevDb for StubDevDb {
+impl ExampleDb for StubExampleDb {
     #[roles(any("operator"))]
-    async fn get_device_info(
+    async fn get_end_point_one(
         &self,
-        request: Request<DeviceList>,
-    ) -> Result<Response<DeviceInfoReply>, Status> {
-        // Echo the device names back in the reply so the test can verify
+        request: Request<IdList>,
+    ) -> Result<Response<ReplyOne>, Status> {
+        // Echo the id list back as an empty reply so the test can verify
         // the response was actually produced by this handler.
-        let _devices = request.into_inner().device;
-        Ok(Response::new(DeviceInfoReply { set: vec![] }))
+        let _ids = request.into_inner().id;
+        Ok(Response::new(ReplyOne {
+            section_one: vec![],
+        }))
     }
 
-    async fn get_all_alarm_info(
+    async fn get_end_point_two(
         &self,
-        _request: Request<DeviceList>,
-    ) -> Result<Response<AlarmInfoReply>, Status> {
-        Err(Status::unimplemented("not used in integration tests"))
-    }
-
-    async fn get_alarm_text(
-        &self,
-        _request: Request<AlarmTextIdList>,
-    ) -> Result<Response<DeviceAlarmTextList>, Status> {
-        Err(Status::unimplemented("not used in integration tests"))
-    }
-
-    async fn get_plot_configuration(
-        &self,
-        _request: Request<PlotSelector>,
-    ) -> Result<Response<PlotConfigResult>, Status> {
-        Err(Status::unimplemented("not used in integration tests"))
-    }
-
-    async fn get_user_plot_configuration(
-        &self,
-        _request: Request<Empty>,
-    ) -> Result<Response<PlotConfigResult>, Status> {
-        Err(Status::unimplemented("not used in integration tests"))
-    }
-
-    async fn delete_plot_configuration(
-        &self,
-        _request: Request<PlotSelector>,
-    ) -> Result<Response<PlotConfigResult>, Status> {
-        Err(Status::unimplemented("not used in integration tests"))
-    }
-
-    async fn save_plot_configuration(
-        &self,
-        _request: Request<PlotConfigSpecification>,
-    ) -> Result<Response<PlotConfigResult>, Status> {
-        Err(Status::unimplemented("not used in integration tests"))
-    }
-
-    async fn save_user_plot_configuration(
-        &self,
-        _request: Request<PlotConfig>,
-    ) -> Result<Response<PlotConfigResult>, Status> {
+        _request: Request<IdList>,
+    ) -> Result<Response<ReplyTwo>, Status> {
         Err(Status::unimplemented("not used in integration tests"))
     }
 }
@@ -173,7 +131,7 @@ async fn start_server() -> (SocketAddr, oneshot::Sender<()>) {
 
         Server::builder()
             .layer(auth_layer)
-            .add_service(DevDbServer::new(StubDevDb))
+            .add_service(ExampleDbServer::new(StubExampleDb))
             .serve_with_incoming_shutdown(incoming, async {
                 let _ = shutdown_rx.await;
             })
@@ -198,20 +156,18 @@ async fn full_round_trip_with_valid_operator_jwt_succeeds() {
 
     let operator_jwt = make_jwt(&["operator"]);
     let mut client =
-        DevDbClient::from_endpoint_with_provider(&endpoint, ForwardedToken::new(operator_jwt))
+        ExampleDbClient::from_endpoint_with_provider(&endpoint, ForwardedToken::new(operator_jwt))
             .unwrap();
 
     let response = client
-        .get_device_info(DeviceList {
-            device: vec!["M:OUTTMP".to_string()],
-        })
+        .get_end_point_one(IdList { id: vec![1, 2, 3] })
         .await
         .expect("RPC must succeed when caller has the 'operator' role");
 
     // The stub returns an empty set — just verify we got a response.
     assert!(
-        response.into_inner().set.is_empty(),
-        "stub handler must return an empty DeviceInfoReply"
+        response.into_inner().section_one.is_empty(),
+        "stub handler must return an empty ReplyOne"
     );
 }
 
@@ -227,13 +183,11 @@ async fn full_round_trip_with_wrong_role_returns_permission_denied() {
     // "viewer" is not "operator" — the role check must reject this.
     let viewer_jwt = make_jwt(&["viewer"]);
     let mut client =
-        DevDbClient::from_endpoint_with_provider(&endpoint, ForwardedToken::new(viewer_jwt))
+        ExampleDbClient::from_endpoint_with_provider(&endpoint, ForwardedToken::new(viewer_jwt))
             .unwrap();
 
     let err = client
-        .get_device_info(DeviceList {
-            device: vec!["M:OUTTMP".to_string()],
-        })
+        .get_end_point_one(IdList { id: vec![1] })
         .await
         .unwrap_err();
 
@@ -256,13 +210,11 @@ async fn full_round_trip_with_no_token_returns_unauthenticated() {
     // No token — JwtValidationLayer must reject the request before it reaches
     // the handler.
     let mut client =
-        DevDbClient::from_endpoint_with_provider(&endpoint, ForwardedToken::new(String::new()))
+        ExampleDbClient::from_endpoint_with_provider(&endpoint, ForwardedToken::new(String::new()))
             .unwrap();
 
     let err = client
-        .get_device_info(DeviceList {
-            device: vec!["M:OUTTMP".to_string()],
-        })
+        .get_end_point_one(IdList { id: vec![1] })
         .await
         .unwrap_err();
 
@@ -284,12 +236,10 @@ async fn full_round_trip_with_no_auth_header_returns_unauthenticated() {
 
     // No token — JwtValidationLayer must reject the request before it reaches
     // the handler.
-    let mut client = DevDbClient::from_endpoint(&endpoint).unwrap();
+    let mut client = ExampleDbClient::from_endpoint(&endpoint).unwrap();
 
     let err = client
-        .get_device_info(DeviceList {
-            device: vec!["M:OUTTMP".to_string()],
-        })
+        .get_end_point_one(IdList { id: vec![1] })
         .await
         .unwrap_err();
 

@@ -1,12 +1,18 @@
 //! Server-side JWT validation layer for tonic gRPC services.
 //!
-//! The primary entry point is [`new_jwt_validation_layer`], which wraps any
-//! [`TokenValidator`] in a [`tower::Layer`] that validates `Authorization: Bearer`
-//! headers on every incoming request before the handler is called.
+//! Defines two types and one constructor:
 //!
-//! On success, the validated [`KeycloakClaims`] are inserted into the request's
-//! extensions so that handler methods can retrieve them via
-//! `request.extensions().get::<KeycloakClaims>()`.
+//! - [`JwtValidationService`] — the [`tonic::service::Interceptor`] that
+//!   validates `Authorization: Bearer` headers on every incoming request.
+//! - [`JwtValidationLayer`] — a type alias for
+//!   `InterceptorLayer<JwtValidationService<V>>`.
+//! - [`validator_into_layer`] — constructs a [`JwtValidationLayer`] from any
+//!   [`TokenValidator`].
+//!
+//! On successful validation, [`KeycloakClaims`] are inserted into the request's
+//! extensions so handler methods can retrieve them via
+//! `request.extensions().get::<KeycloakClaims>()`. On failure the request is
+//! rejected with [`tonic::Code::Unauthenticated`] before reaching any handler.
 
 use std::sync::Arc;
 

@@ -1,10 +1,9 @@
-//! gRPC client interceptors for attaching JWT `Authorization` headers to
-//! outbound requests.
+//! [`ClientJwtInterceptor`] — outbound tonic interceptor that attaches a JWT
+//! `Authorization: Bearer` header to every request by calling a [`TokenProvider`].
 //!
-//! - [`ClientJwtInterceptor`] — calls any [`TokenProvider`] on each outbound
-//!   request and attaches the result as a `Bearer` token. Used internally by
-//!   the `from_endpoint_with_provider` constructors generated on every client
-//!   struct by `#[derive(GrpcClient)]`.
+//! This is the only type defined in this module. It is used internally by the
+//! `from_endpoint_with_provider` constructor that `#[derive(GrpcClient)]`
+//! generates on every client struct; consumers do not construct it directly.
 
 use rust_auth_lib::TokenProvider;
 use tonic::{Request, Status, service::Interceptor};

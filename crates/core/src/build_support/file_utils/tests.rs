@@ -1,4 +1,7 @@
-//! Tests for `file_utils` — covers proto package extraction from file contents.
+//! Tests for [`super::extract_package`].
+//!
+//! Covers: simple package declaration, leading whitespace, missing package
+//! line, empty package name, and first-occurrence semantics.
 
 use super::*;
 

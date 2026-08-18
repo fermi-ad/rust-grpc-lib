@@ -311,6 +311,14 @@ pub struct MyAlarmClient<T>(alarm_commands_client::AlarmCommandsClient<T>);
 
 ## Proc-macro reference
 
+### `#[derive(GrpcClient)]`
+
+Applied automatically by `Config::new()` to every generated client struct. Generates a `from_endpoint_with_provider(endpoint, provider)` constructor that retrieves a pooled channel and wraps it with `ClientJwtInterceptor`. Requires the `auth` feature (on by default).
+
+### `#[derive(GrpcNoAuthClient)]`
+
+Generates a `from_endpoint(endpoint)` constructor with no auth wiring. Applied automatically by `Config::new()` when the `unauthenticated` feature is enabled. Can also be applied manually to custom wrapper types. **Do not use in production.**
+
 ### `#[grpc_service]`
 
 Applied to an `impl Trait for Type` block. Injects Keycloak role-checking guards into methods annotated with `#[roles(...)]`. Methods without `#[roles(...)]` are left untouched — a valid JWT is still required by `JwtValidationLayer`, but no role check is injected by this macro.
@@ -367,6 +375,9 @@ This project uses a devcontainer. Open it in VS Code with the Dev Containers ext
 # After cloning
 git submodule update --init --recursive
 cargo build
+
+# Run all tests (unit + integration)
+cargo test
 ```
 
 ### Repository layout
@@ -376,7 +387,7 @@ This is a Cargo workspace with three crates:
 | Crate | Path | Description |
 |---|---|---|
 | `rust-grpc-lib` | [`crates/core/`](crates/core/) | The main library crate consumers depend on. Contains the connection pool, auth wiring, and build-support helpers. |
-| `grpc-macro` | [`crates/grpc_macro/`](crates/grpc_macro/) | Proc-macro crate providing `#[derive(GrpcClient)]`, `#[grpc_service]`, and `#[roles(...)]`. Re-exported from the main crate — consumers never need to depend on this directly. |
+| `grpc-macro` | [`crates/grpc_macro/`](crates/grpc_macro/) | Proc-macro crate providing `#[derive(GrpcClient)]`, `#[derive(GrpcNoAuthClient)]`, `#[grpc_service]`, and `#[roles(...)]`. Re-exported from the main crate — consumers never need to depend on this directly. |
 | `integration_tests` | [`crates/integration_tests/`](crates/integration_tests/) | Integration-test crate. Exercises the full client→server gRPC round-trip with real JWT auth and tests the `#[grpc_service]` macro expansion. |
 
 ### Integration test fixtures

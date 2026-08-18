@@ -1,5 +1,9 @@
-//! Tests for the `proto_rs` module — covers `segment_to_mod_name`, `build_tree`,
-//! and the `ProtoRsGenerator::generate` output.
+//! Tests for [`super::segment_to_mod_name`], [`super::build_tree`], and
+//! [`super::ProtoRsGenerator::generate`].
+//!
+//! Covers: keyword escaping, tree construction from package lists (including
+//! shared prefixes and sort order), invariant violations (debug-only panics),
+//! and the full `generate` output for various package configurations.
 
 use super::*;
 

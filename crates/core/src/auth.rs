@@ -1,33 +1,39 @@
-//! Auth primitives for gRPC — re-exports from `rust-auth-lib` plus gRPC-specific wiring.
+//! Re-exports from `rust-auth-lib` plus the two gRPC-specific sub-modules.
 //!
-//! Import everything you need from `rust_grpc_lib::auth`; a direct dependency on
-//! `rust-auth-lib` is not required for gRPC use cases.
+//! Everything a consumer needs for JWT auth lives here; a direct dependency on
+//! `rust-auth-lib` is not required.
 //!
-//! # What is re-exported
+//! # Sub-modules
 //!
-//! - **Traits** — [`TokenProvider`], [`TokenValidator`], [`Claims`], [`Ephemeral`]
-//! - **Token sources** — [`FileTokenProvider`] (reads a platform-injected token
-//!   file), [`ForwardedToken`] (wraps a raw token string as a provider)
-//! - **Validators** — [`StaticKeysValidator`] / [`StaticKeysValidatorConfig`]
-//!   (always available when the `auth` feature is enabled; backed by
-//!   `rust-auth-lib`'s `jwks-local` implementation)
-//! - **Error types** — [`AuthError`], [`ConfigError`], [`TokenError`]
-//! - **Keycloak claims** — [`keycloak::KeycloakClaims`]
-//! - **gRPC interceptors** — [`interceptor::ClientJwtInterceptor`] (used
-//!   internally by the generated `from_endpoint_with_provider` constructors)
-//! - **Server layer** — [`layer::JwtValidationLayer`] (type alias),
-//!   [`layer::JwtValidationService`], [`validator_into_layer`] (constructor)
-//! - **Token extraction** — [`extract_token`] (pulls a `Bearer` token out of an
-//!   incoming tonic request and returns it as a [`ForwardedToken`])
+//! - [`interceptor`] — [`ClientJwtInterceptor`], the outbound client interceptor
+//!   that attaches `Bearer` tokens to every outgoing request.
+//! - [`layer`] — [`JwtValidationLayer`] / [`JwtValidationService`] and the
+//!   [`validator_into_layer`] constructor for server-side JWT validation.
 //!
-//! # What is intentionally omitted
+//! # Re-exported items
 //!
-//! - **`KeycloakClientCredentialsProvider`** — not re-exported here because it
-//!   requires a live Keycloak token endpoint and is not needed for the standard
-//!   service archetypes. Use `rust-auth-lib` directly if you need it.
-//! - **[`JwksValidator`] / [`JwksValidatorConfig`]** — only re-exported when the
-//!   `jwks-url` feature is enabled. This feature is opt-in because it pulls in an
-//!   HTTP client and background refresh task that most services do not need.
+//! **Traits:** [`TokenProvider`], [`TokenValidator`], [`Claims`], [`Ephemeral`]
+//!
+//! **Token sources:** [`FileTokenProvider`], [`ForwardedToken`]
+//!
+//! **Validators:** [`StaticKeysValidator`], [`StaticKeysValidatorConfig`]
+//! (backed by `rust-auth-lib`'s `jwks-local` implementation; always available
+//! when the `auth` feature is enabled)
+//!
+//! **Errors:** [`AuthError`], [`ConfigError`], [`TokenError`]
+//!
+//! **Claims:** [`KeycloakClaims`]
+//!
+//! **Free function:** [`extract_token`] — strips the `Bearer ` prefix from an
+//! incoming tonic request's `Authorization` header and returns a
+//! [`ForwardedToken`].
+//!
+//! # Intentionally omitted
+//!
+//! - `KeycloakClientCredentialsProvider` — requires a live Keycloak token
+//!   endpoint; use `rust-auth-lib` directly if needed.
+//! - [`JwksValidator`] / [`JwksValidatorConfig`] — only re-exported when the
+//!   `jwks-url` feature is enabled (opt-in; pulls in an HTTP client).
 
 pub mod interceptor;
 pub mod layer;

@@ -75,16 +75,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("vendored protoc must be available");
     unsafe { std::env::set_var("PROTOC", protoc); }
 
-    // Compile only the DevDB proto — it has a single unary RPC with simple
-    // message types and only imports google/protobuf/empty.proto (a well-known
-    // type bundled with tonic-prost-build).
+    // Compile the grpc-db-template example proto — it has simple unary RPCs,
+    // no deprecated fields, and only imports google/protobuf/timestamp.proto
+    // (a well-known type bundled with tonic-prost-build).
     tonic_prost_build::configure()
         .compile_well_known_types(true)
         .client_attribute(".", "#[derive(::rust_grpc_lib::GrpcClient)]")
         .client_attribute(".", "#[derive(::rust_grpc_lib::GrpcNoAuthClient)]")
         .out_dir(&out_dir)
         .compile_protos(
-            &[proto_dir.join("controls/service/DevDB/v1/DevDB.proto")],
+            &[proto_dir.join("controls/service/grpc-db-template/v1/example.proto")],
             &[interface_dir.clone()],
         )?;
 

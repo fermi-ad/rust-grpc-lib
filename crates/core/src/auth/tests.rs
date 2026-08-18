@@ -1,4 +1,4 @@
-//! Tests for the token extraction function.
+//! Tests for [`super::extract_token`].
 
 use super::*;
 
