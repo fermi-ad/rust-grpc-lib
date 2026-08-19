@@ -34,8 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - [`JwtValidationLayer<C, V>`](crates/core/src/auth/layer.rs) / [`JwtValidationService<C, V>`](crates/core/src/auth/layer.rs) — server-side tower layer that validates incoming JWTs and rejects unauthenticated requests before they reach any handler. Generic over both the validator `V: TokenValidator` and the claims type `C: Claims`, so it works with any claims shape — not just `KeycloakClaims`. For the standard Keycloak setup: `validator_into_layer::<KeycloakClaims, _>(validator)`.
   - [`validator_into_layer`](crates/core/src/auth/layer.rs) — constructor for `JwtValidationLayer`.
   - [`extract_token`](crates/core/src/auth.rs) — strips the `Bearer ` prefix from an incoming request's `Authorization` header and returns a `ForwardedToken`.
-  - Re-exports of `rust-auth-lib` types: `TokenProvider`, `TokenValidator`, `Claims`, `Ephemeral`, `FileTokenProvider`, `ForwardedToken`, `StaticKeysValidator`, `StaticKeysValidatorConfig`, `KeycloakClaims`, `AuthError`, `ConfigError`, `TokenError`.
-  - Optional `JwksValidator` / `JwksValidatorConfig` re-exports behind the `jwks-url` feature.
+  - Re-exports of `rust-auth-lib` types: `TokenProvider`, `TokenValidator`, `Claims`, `Ephemeral`, `FileTokenProvider`, `ForwardedToken`, `KeyValidator`, `KeyValidatorConfig`, `KeycloakClaims`, `AuthError`, `ConfigError`, `TokenError`.
 
 - **`#[derive(GrpcClient)]` macro.** Generates a `from_endpoint_with_provider(endpoint, provider)` constructor on any tonic client struct. Applied automatically by `Config::new()` to every generated client. Re-exported as `rust_grpc_lib::GrpcClient`.
 
@@ -45,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`unauthenticated` feature flag.** Enables `GrpcNoAuthClient` and the `from_endpoint` constructor on generated clients. Intended for test harnesses only; do not enable in production.
 
-- **`jwks-url` feature flag.** Enables live JWKS endpoint rotation via `JwksValidator` (opt-in; pulls in an HTTP client via `reqwest`).
+- **`jwks-url` feature flag.** Enables live JWKS endpoint rotation via `KeyValidatorConfig::from_jwks_url` (opt-in; pulls in an HTTP client via `reqwest`).
 
 - **Integration test crate** (`crates/integration_tests`). Exercises the full client→server gRPC round-trip with real JWT auth, real tonic transport, and the `#[keycloak_authenticated_service]` macro expansion. Tests run with `cargo test` and require no live `protoc` invocation — fixtures are pre-generated and committed.
 
