@@ -9,7 +9,7 @@
 //! - [`validator_into_layer`] — constructs a [`JwtValidationLayer`] from any
 //!   [`TokenValidator`].
 //!
-//! On successful validation, [`KeycloakClaims`] are inserted into the request's
+//! On successful validation, [`KeycloakClaims`](crate::auth::KeycloakClaims) are inserted into the request's
 //! extensions so handler methods can retrieve them via
 //! `request.extensions().get::<KeycloakClaims>()`. On failure the request is
 //! rejected with [`tonic::Code::Unauthenticated`] before reaching any handler.
@@ -26,7 +26,7 @@ use tonic::{
 #[cfg(test)]
 mod tests;
 
-/// A [`tower::Layer`] that installs JWT validation on a tonic server.
+/// An [`InterceptorLayer`] that installs JWT validation on a tonic server.
 ///
 /// Wrap your tonic server with this layer to enforce that every incoming gRPC
 /// request carries a valid `Authorization: Bearer <token>` header. Requests
@@ -42,13 +42,13 @@ mod tests;
 /// ```rust,ignore
 /// use std::sync::Arc;
 /// use rust_grpc_lib::auth::{
-///     validator_into_layer, KeycloakClaims, StaticKeysValidator, StaticKeysValidatorConfig,
+///     validator_into_layer, KeycloakClaims, KeyValidator, KeyValidatorConfig,
 /// };
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     // Reads AUTH_JWKS_FILE or AUTH_PEM_FILE; optionally AUTH_ISSUER
-///     let validator = Arc::new(StaticKeysValidator::new(StaticKeysValidatorConfig::from_env()?)?);
+///     let validator = Arc::new(KeyValidator::new(KeyValidatorConfig::from_env()?)?);
 ///
 ///     tonic::transport::Server::builder()
 ///         .layer(validator_into_layer::<KeycloakClaims, _>(validator))
@@ -77,7 +77,7 @@ pub fn validator_into_layer<C: Claims, V: TokenValidator>(
 /// [`JwtValidationLayer`]. You do not typically construct it directly; use
 /// [`validator_into_layer`] instead.
 ///
-/// On success, the validated [`KeycloakClaims`] are inserted into the request's
+/// On success, the validated [`KeycloakClaims`](crate::auth::KeycloakClaims) are inserted into the request's
 /// extensions so that handler methods can retrieve them:
 ///
 /// ```rust,ignore

@@ -16,9 +16,7 @@
 //!
 //! **Token sources:** [`FileTokenProvider`], [`ForwardedToken`]
 //!
-//! **Validators:** [`StaticKeysValidator`], [`StaticKeysValidatorConfig`]
-//! (backed by `rust-auth-lib`'s `jwks-local` implementation; always available
-//! when the `auth` feature is enabled)
+//! **Validators:** [`KeyValidator`], [`KeyValidatorConfig`]
 //!
 //! **Errors:** [`AuthError`], [`ConfigError`], [`TokenError`]
 //!
@@ -32,8 +30,6 @@
 //!
 //! - `KeycloakClientCredentialsProvider` — requires a live Keycloak token
 //!   endpoint; use `rust-auth-lib` directly if needed.
-//! - [`JwksValidator`] / [`JwksValidatorConfig`] — only re-exported when the
-//!   `jwks-url` feature is enabled (opt-in; pulls in an HTTP client).
 
 pub mod interceptor;
 pub mod layer;
@@ -48,9 +44,9 @@ pub use rust_auth_lib::TokenValidator;
 pub use rust_auth_lib::FileTokenProvider;
 pub use rust_auth_lib::ForwardedToken;
 
-// Validators (always available when `auth` feature is enabled — uses `jwks-local`)
-pub use rust_auth_lib::StaticKeysValidator;
-pub use rust_auth_lib::StaticKeysValidatorConfig;
+// Validators
+pub use rust_auth_lib::KeyValidator;
+pub use rust_auth_lib::KeyValidatorConfig;
 
 // Error types
 pub use rust_auth_lib::AuthError;
@@ -59,12 +55,6 @@ pub use rust_auth_lib::TokenError;
 
 // Keycloak-specific claims
 pub use rust_auth_lib::keycloak::KeycloakClaims;
-
-// Live JWKS rotation — only when the `jwks-url` feature is enabled
-#[cfg(feature = "jwks-url")]
-pub use rust_auth_lib::JwksValidator;
-#[cfg(feature = "jwks-url")]
-pub use rust_auth_lib::JwksValidatorConfig;
 
 // gRPC-specific types from submodules
 pub use interceptor::ClientJwtInterceptor;

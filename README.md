@@ -1,5 +1,7 @@
 # rust-grpc-lib
 
+The latest documentation for this crate [can be found here](https://fuzzy-adventure-5v1nq96.pages.github.io/rust_grpc_lib/index.html)
+
 A Rust library for building gRPC services in the Controls group. It handles three things so you don't have to:
 
 1. **Proto bundling & code generation** — the `.proto` definitions from [`interface-definitions`](https://github.com/fermi-ad/interface-definitions) are shipped with this library. Call `build_support::generate_protos()` from your `build.rs` and you get fully-typed Rust message and client structs with no manual proto management.
@@ -347,15 +349,10 @@ Marker attribute consumed by `#[keycloak_authenticated_service]`. Two variants:
 
 ### Environment variables
 
+Check [`rust-auth-lib`'s README](https://github.com/fermi-ad/rust-auth-lib) for the list of environment variables that are expected by the re-exported elements in this library.
+
 | Variable | Default | Description |
 |---|---|---|
-| `AUTH_JWKS_FILE` | — | Path to a local JWKS JSON file used by `StaticKeysValidator` |
-| `AUTH_PEM_FILE` | — | Path to a PEM-encoded RSA public key used by `StaticKeysValidator` (alternative to `AUTH_JWKS_FILE`) |
-| `AUTH_ISSUER` | — | Expected `iss` claim value; omit to skip issuer validation |
-| `AUTH_JWKS_URL` | — | Live JWKS endpoint URL used by `JwksValidator` (requires `jwks-url` feature) |
-| `AUTH_JWKS_CACHE_TTL_SECS` | `300` | How long `JwksValidator` caches the fetched key set before re-fetching |
-| `SERVICE_TOKEN_FILE` | — | Path to a Vault- or Kubernetes-injected service token file used by `FileTokenProvider` |
-| `SERVICE_TOKEN_CACHE_TTL_SECS` | `30` | How long `FileTokenProvider` caches the token before re-reading the file |
 | `RUST_GRPC_LIB_KEEP_ALIVE_INTERVAL_SECS` | `30` | Seconds between HTTP/2 keepalive pings on every pooled channel |
 | `RUST_GRPC_LIB_KEEP_ALIVE_TIMEOUT_SECS` | `10` | Seconds to wait for a keepalive ping acknowledgement before closing the connection |
 

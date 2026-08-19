@@ -32,9 +32,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tonic::{Code, Request, Response, Status};
 
-use rust_grpc_lib::auth::{
-    KeycloakClaims, StaticKeysValidator, StaticKeysValidatorConfig, validator_into_layer,
-};
+use rust_grpc_lib::auth::{KeyValidator, KeyValidatorConfig, KeycloakClaims, validator_into_layer};
 
 use crate::services::example::{
     IdList, ReplyOne, ReplyTwo,
@@ -73,10 +71,10 @@ fn make_jwt(realm_roles: &[&str]) -> String {
     encode(&header, &payload, &encoding_key).expect("token encoding must succeed")
 }
 
-fn make_validator() -> Arc<StaticKeysValidator> {
+fn make_validator() -> Arc<KeyValidator> {
     let jwks = test_fixtures::make_jwks_json_str(TEST_KID);
-    let config = StaticKeysValidatorConfig::from_jwks_str(&jwks);
-    Arc::new(StaticKeysValidator::new(config).expect("validator construction must succeed"))
+    let config = KeyValidatorConfig::from_jwks_str(&jwks);
+    Arc::new(KeyValidator::new(config).expect("validator construction must succeed"))
 }
 
 // ---------------------------------------------------------------------------
