@@ -126,7 +126,7 @@ This project uses a devcontainer. Open in VS Code with the Dev Containers extens
 
 ```
 # After cloning
-git submodule update --init --recursive
+git submodule update --init --recursive --remote
 cargo build
 ```
 
