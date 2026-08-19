@@ -6,7 +6,7 @@
 //! ```text
 //! gRPC client  →  Authorization: Bearer <JWT>
 //! JwtValidationLayer  →  validates RS256 token, inserts KeycloakClaims
-//! #[grpc_service] + #[roles(any("operator"))]  →  role check
+//! #[keycloak_authenticated_service] + #[roles(any("operator"))]  →  role check
 //! handler  →  returns Ok or permission_denied
 //! ```
 //!
@@ -89,7 +89,7 @@ fn make_validator() -> Arc<StaticKeysValidator> {
 
 struct StubExampleDb;
 
-#[rust_grpc_lib::grpc_service]
+#[rust_grpc_lib::keycloak_authenticated_service]
 #[tonic::async_trait]
 impl ExampleDb for StubExampleDb {
     #[roles(any("operator"))]

@@ -41,13 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`#[derive(GrpcNoAuthClient)]` macro** (`unauthenticated` feature). Generates a `from_endpoint(endpoint)` constructor with no auth wiring. For test harnesses only. Re-exported as `rust_grpc_lib::GrpcNoAuthClient`.
 
-- **`#[grpc_service]` and `#[roles(...)]` attribute macros.** Apply `#[grpc_service]` to an `impl Trait for Type` block to inject Keycloak role-checking guards into methods annotated with `#[roles(any("r1", "r2"))]` or `#[roles(all("r1", "r2"))]`. Re-exported as `rust_grpc_lib::grpc_service`.
+- **`#[keycloak_authenticated_service]` and `#[roles(...)]` attribute macros.** Apply `#[keycloak_authenticated_service]` to an `impl Trait for Type` block to inject Keycloak role-checking guards into methods annotated with `#[roles(any("r1", "r2"))]` or `#[roles(all("r1", "r2"))]`. Re-exported as `rust_grpc_lib::keycloak_authenticated_service`.
 
 - **`unauthenticated` feature flag.** Enables `GrpcNoAuthClient` and the `from_endpoint` constructor on generated clients. Intended for test harnesses only; do not enable in production.
 
 - **`jwks-url` feature flag.** Enables live JWKS endpoint rotation via `JwksValidator` (opt-in; pulls in an HTTP client via `reqwest`).
 
-- **Integration test crate** (`crates/integration_tests`). Exercises the full client→server gRPC round-trip with real JWT auth, real tonic transport, and the `#[grpc_service]` macro expansion. Tests run with `cargo test` and require no live `protoc` invocation — fixtures are pre-generated and committed.
+- **Integration test crate** (`crates/integration_tests`). Exercises the full client→server gRPC round-trip with real JWT auth, real tonic transport, and the `#[keycloak_authenticated_service]` macro expansion. Tests run with `cargo test` and require no live `protoc` invocation — fixtures are pre-generated and committed.
 
 - **`scripts/gen-test-fixtures.sh`** — script to regenerate committed proto fixtures after updating the `interface-definitions` submodule.
 

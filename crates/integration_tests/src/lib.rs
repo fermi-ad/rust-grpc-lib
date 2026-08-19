@@ -6,7 +6,7 @@
 //!
 //! # Test modules
 //!
-//! - [`grpc_service_macro`] — unit-level tests for the `#[grpc_service]` macro
+//! - [`keycloak_authenticated_service_macro`] — unit-level tests for the `#[keycloak_authenticated_service]` macro
 //!   expansion (role checks, missing claims, `any`/`all` variants).
 //! - [`integration_round_trip`] — full client→server gRPC round-trip tests
 //!   using a real tonic server on a loopback port with `JwtValidationLayer`.
@@ -26,9 +26,9 @@
 //! submodule, run `bash scripts/gen-test-fixtures.sh`.
 
 #[cfg(test)]
-mod grpc_service_macro;
-#[cfg(test)]
 mod integration_round_trip;
+#[cfg(test)]
+mod keycloak_authenticated_service_macro;
 
 #[cfg(test)]
 pub mod google {

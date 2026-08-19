@@ -17,7 +17,7 @@
 //! |---|---|---|
 //! | [`GrpcClient`] | `auth` (default) | `from_endpoint_with_provider` on tonic client structs |
 //! | [`GrpcNoAuthClient`] | `unauthenticated` | `from_endpoint` (no-auth) on tonic client structs |
-//! | [`grpc_service`] | `auth` (default) | Role-checking guards on `impl Trait for Type` blocks |
+//! | [`keycloak_authenticated_service`] | `auth` (default) | Role-checking guards on `impl Trait for Type` blocks |
 //!
 //! See each module and the `grpc-macro` crate for full documentation.
 
@@ -62,7 +62,7 @@ pub use grpc_macro::GrpcNoAuthClient;
 /// Attribute macro applied to `impl Trait for Type` blocks that injects
 /// Keycloak role-checking guards into methods annotated with `#[roles(...)]`.
 ///
-/// Re-exported here so consumers can write `#[rust_grpc_lib::grpc_service]`
+/// Re-exported here so consumers can write `#[rust_grpc_lib::authenticated_service]`
 /// without a direct dependency on `grpc-macro`.
 #[cfg(any(feature = "auth", doc, test))]
-pub use grpc_macro::grpc_service;
+pub use grpc_macro::keycloak_authenticated_service;

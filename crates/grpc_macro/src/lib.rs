@@ -8,11 +8,11 @@
 //! - [`GrpcNoAuthClient`] — derive macro that generates `from_endpoint` (no
 //!   auth) on a tonic client struct. For test harnesses only; requires the
 //!   `unauthenticated` feature on `rust-grpc-lib`.
-//! - [`grpc_service`] — attribute macro applied to an `impl Trait for Type`
+//! - [`keycloak_authenticated_service`] — attribute macro applied to an `impl Trait for Type`
 //!   block that injects Keycloak role-checking guards into methods annotated
 //!   with `#[roles(...)]`.
-//! - [`roles`] — marker attribute consumed by [`grpc_service`]. A pass-through
-//!   no-op when used without `#[grpc_service]` on the enclosing `impl` block.
+//! - [`roles`] — marker attribute consumed by [`keycloak_authenticated_service`]. A pass-through
+//!   no-op when used without `#[keycloak_authenticated_service]` on the enclosing `impl` block.
 //!
 //! Internal helpers (`RolesSpec`, `RolesArgs`, `extract_roles_attr`,
 //! `first_param_ident`, `build_guard`) are private to this crate.
@@ -75,17 +75,17 @@ pub fn grpc_no_auth_client_derive(input: TokenStream) -> TokenStream {
     TokenStream::from(as_grpc_client)
 }
 
-/// Marker attribute consumed by [`grpc_service`].
+/// Marker attribute consumed by [`keycloak_authenticated_service`].
 ///
-/// When used standalone (without `#[grpc_service]` on the enclosing `impl`
+/// When used standalone (without `#[keycloak_authenticated_service]` on the enclosing `impl`
 /// block) this attribute is a pass-through no-op so that the code still
-/// compiles. `#[grpc_service]` strips and processes it before emitting the
+/// compiles. `#[keycloak_authenticated_service]` strips and processes it before emitting the
 /// final `impl` block.
 ///
 /// # Usage
 ///
 /// ```rust,ignore
-/// #[grpc_service]
+/// #[keycloak_authenticated_service]
 /// impl MyService for MyServer {
 ///     #[roles(any("operator", "admin"))]
 ///     async fn set_data(&self, request: Request<SetDataRequest>)
@@ -97,7 +97,7 @@ pub fn grpc_no_auth_client_derive(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Pass-through; grpc_service strips and processes this attribute.
+    // Pass-through; keycloak_authenticated_service strips and processes this attribute.
     item
 }
 
@@ -134,7 +134,7 @@ pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// }
 /// ```
 #[proc_macro_attribute]
-pub fn grpc_service(_attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn keycloak_authenticated_service(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut impl_block = parse_macro_input!(item as ItemImpl);
 
     for impl_item in &mut impl_block.items {

@@ -4,7 +4,7 @@ A Rust library for building gRPC services in the Controls group. It handles thre
 
 1. **Proto bundling & code generation** — the `.proto` definitions from [`interface-definitions`](https://github.com/fermi-ad/interface-definitions) are shipped with this library. Call `build_support::generate_protos()` from your `build.rs` and you get fully-typed Rust message and client structs with no manual proto management.
 2. **Connection pooling** — a process-wide pool of lazily-connected channels, keyed by endpoint string. Generated client constructors share connections automatically; no manual pool management is required.
-3. **Zero-trust JWT auth** — outbound calls carry a `Bearer` token; inbound calls are validated before reaching your handler. Role-based access control is enforced via the `#[grpc_service]` / `#[roles(...)]` proc-macro attributes.
+3. **Zero-trust JWT auth** — outbound calls carry a `Bearer` token; inbound calls are validated before reaching your handler. Role-based access control is enforced via the `#[keycloak_authenticated_service]` / `#[roles(...)]` proc-macro attributes.
 
 > **Tokio required.** This library depends on Tonic, which requires a Tokio async runtime. All examples below assume you are inside `#[tokio::main]` or an equivalent async context.
 
@@ -182,7 +182,7 @@ use rust_grpc_lib::auth::{
 
 struct MyDaqService;
 
-#[rust_grpc_lib::grpc_service]
+#[rust_grpc_lib::keycloak_authenticated_service]
 impl Daq for MyDaqService {
     // At least one of the listed roles must be present in the JWT.
     #[roles(any("viewer", "operator", "admin"))]
@@ -319,13 +319,13 @@ Applied automatically by `Config::new()` to every generated client struct. Gener
 
 Generates a `from_endpoint(endpoint)` constructor with no auth wiring. Applied automatically by `Config::new()` when the `unauthenticated` feature is enabled. Can also be applied manually to custom wrapper types. **Do not use in production.**
 
-### `#[grpc_service]`
+### `#[keycloak_authenticated_service]`
 
 Applied to an `impl Trait for Type` block. Injects Keycloak role-checking guards into methods annotated with `#[roles(...)]`. Methods without `#[roles(...)]` are left untouched — a valid JWT is still required by `JwtValidationLayer`, but no role check is injected by this macro.
 
 ### `#[roles(...)]`
 
-Marker attribute consumed by `#[grpc_service]`. Two variants:
+Marker attribute consumed by `#[keycloak_authenticated_service]`. Two variants:
 
 | Variant | Meaning |
 |---|---|
@@ -387,8 +387,8 @@ This is a Cargo workspace with three crates:
 | Crate | Path | Description |
 |---|---|---|
 | `rust-grpc-lib` | [`crates/core/`](crates/core/) | The main library crate consumers depend on. Contains the connection pool, auth wiring, and build-support helpers. |
-| `grpc-macro` | [`crates/grpc_macro/`](crates/grpc_macro/) | Proc-macro crate providing `#[derive(GrpcClient)]`, `#[derive(GrpcNoAuthClient)]`, `#[grpc_service]`, and `#[roles(...)]`. Re-exported from the main crate — consumers never need to depend on this directly. |
-| `integration_tests` | [`crates/integration_tests/`](crates/integration_tests/) | Integration-test crate. Exercises the full client→server gRPC round-trip with real JWT auth and tests the `#[grpc_service]` macro expansion. |
+| `grpc-macro` | [`crates/grpc_macro/`](crates/grpc_macro/) | Proc-macro crate providing `#[derive(GrpcClient)]`, `#[derive(GrpcNoAuthClient)]`, `#[keycloak_authenticated_service]`, and `#[roles(...)]`. Re-exported from the main crate — consumers never need to depend on this directly. |
+| `integration_tests` | [`crates/integration_tests/`](crates/integration_tests/) | Integration-test crate. Exercises the full client→server gRPC round-trip with real JWT auth and tests the `#[keycloak_authenticated_service]` macro expansion. |
 
 ### Integration test fixtures
 

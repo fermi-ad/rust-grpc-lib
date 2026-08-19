@@ -1,4 +1,4 @@
-//! Tests for the `#[grpc_service]` proc-macro expansion.
+//! Tests for the `#[keycloak_authenticated_service]` proc-macro expansion.
 //!
 //! This module lives in the `integration_tests` crate (a consumer of
 //! `rust-grpc-lib`) so that the `::rust_grpc_lib::auth::KeycloakClaims` path
@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::{Code, Request, Response, Status};
 
 use rust_grpc_lib::auth::KeycloakClaims;
-use rust_grpc_lib::grpc_service;
+use rust_grpc_lib::keycloak_authenticated_service;
 
 // ---------------------------------------------------------------------------
 // Minimal tonic-like service trait and server struct
@@ -37,12 +37,12 @@ trait EchoService {
 struct EchoServer;
 
 // Apply the macro.  The `#[roles(any("admin"))]` annotation on `echo` causes
-// `#[grpc_service]` to inject a guard that:
+// `#[keycloak_authenticated_service]` to inject a guard that:
 //   1. Retrieves `KeycloakClaims` from `request.extensions()`.
 //   2. Returns `Status::internal` if the claims are absent.
 //   3. Returns `Status::permission_denied` if the `"admin"` role is absent.
 //   4. Falls through to the original body otherwise.
-#[grpc_service]
+#[keycloak_authenticated_service]
 impl EchoService for EchoServer {
     #[roles(any("admin"))]
     async fn echo(&self, request: Request<String>) -> Result<Response<String>, Status> {
@@ -55,7 +55,7 @@ impl EchoService for EchoServer {
 /// Concrete server type that the `all(...)` variant of the macro is applied to.
 struct MultiRoleServer;
 
-#[grpc_service]
+#[keycloak_authenticated_service]
 impl EchoService for MultiRoleServer {
     #[roles(all("admin", "operator"))]
     async fn echo(&self, request: Request<String>) -> Result<Response<String>, Status> {

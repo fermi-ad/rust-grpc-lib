@@ -20,7 +20,7 @@ use tonic::{Request, Status, service::Interceptor};
 /// and pass it as the provider:
 ///
 /// ```rust,ignore
-/// #[rust_grpc_lib::grpc_service]
+/// #[rust_grpc_lib::keycloak_authenticated_service]
 /// impl Daq for MyDaqService {
 ///     async fn get_data(&self, req: Request<GetDataRequest>) -> Result<Response<GetDataResponse>, Status> {
 ///         let provider = rust_grpc_lib::auth::extract_token(&req)?;
