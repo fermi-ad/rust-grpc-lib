@@ -178,7 +178,7 @@ Sits between the edge and the GraphQL gateway. Validates the incoming user JWT, 
 ```rust
 use std::sync::Arc;
 use rust_grpc_lib::auth::{
-    StaticKeysValidator, StaticKeysValidatorConfig,
+    KeyValidator, KeyValidatorConfig,
     validator_into_layer, extract_token,
 };
 
@@ -215,9 +215,9 @@ impl Daq for MyDaqService {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Reads AUTH_JWKS_FILE or AUTH_PEM_FILE; optionally AUTH_ISSUER.
+    // Reads AUTH_JWKS_FILE or AUTH_PEM_FILE (or AUTH_JWKS_URL if jwks-url feature is on); optionally AUTH_ISSUER.
     let validator = Arc::new(
-        StaticKeysValidator::new(StaticKeysValidatorConfig::from_env()?)?
+        KeyValidator::new(KeyValidatorConfig::from_env()?)?
     );
 
     tonic::transport::Server::builder()
@@ -343,7 +343,7 @@ Marker attribute consumed by `#[keycloak_authenticated_service]`. Two variants:
 | Feature | Default | Description |
 |---|---|---|
 | `auth` | ✅ on | Enables JWT auth; generated clients gain `from_endpoint_with_provider` |
-| `jwks-url` | off | Enables live JWKS endpoint rotation via `JwksValidator` (opt-in; pulls in an HTTP client) |
+| `jwks-url` | off | Enables JWKS key retrieval and rotation from a URL via `KeyValidatorConfig::from_jwks_url` (opt-in; pulls in an HTTP client) |
 | `unauthenticated` | off | Enables `from_endpoint` (no-auth constructor) on generated clients; for test harnesses only |
 | `build` | off | Enables proto code-generation helpers (`build_support` module) |
 
