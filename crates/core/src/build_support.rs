@@ -3,10 +3,10 @@
 //! The public entry point is [`generate_protos`], which consumers call from
 //! their own `build.rs`.
 
+use std::{env, error::Error, ffi::OsStr, fs, path::Path};
+
 mod file_utils;
 mod proto_rs;
-
-use std::{env, error::Error, ffi::OsStr, fs, path::Path};
 
 /// Compile the bundled `.proto` definitions and write a `proto.rs` into your
 /// crate's `OUT_DIR`.

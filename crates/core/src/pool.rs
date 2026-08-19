@@ -30,6 +30,14 @@ use tonic::transport::{Channel, Endpoint, Error};
 
 use crate::GrpcClient;
 
+#[cfg(feature = "auth")]
+use crate::auth::TokenProvider;
+#[cfg(feature = "auth")]
+use crate::auth::interceptor::ClientJwtInterceptor;
+
+#[cfg(test)]
+mod tests;
+
 type ChannelMap = RwLock<HashMap<String, Channel>>;
 
 const KEEP_ALIVE_INTERVAL_VAR: &str = "RUST_GRPC_LIB_KEEP_ALIVE_INTERVAL_SECS";
@@ -41,6 +49,59 @@ static POOL: LazyLock<ChannelMap> = LazyLock::new(RwLock::default);
 
 /// Return a gRPC client connected to `endpoint`, reusing an existing channel
 /// if one has already been created for that endpoint.
+///
+/// The channel is connected lazily: no network activity occurs until the first
+/// RPC is made on the returned client.
+///
+/// This function requires that you are already inside a Tokio runtime (e.g. inside
+/// `#[tokio::main]` or an async service). If you are outside a Tokio runtime, the
+/// call will panic.
+///
+/// # Type parameters
+///
+/// - `C` must implement [`GrpcClient`]. All generated tonic service clients in
+///   this library implement [`GrpcClient`] automatically.
+/// - `P` must implement [`TokenProvider`]. The provider is called on every
+///   outbound request to attach a `Bearer` token via
+///   [`crate::auth::interceptor::ClientJwtInterceptor`].
+///
+/// # Errors
+///
+/// Returns [`tonic::transport::Error`] if `endpoint` is not a valid URI.
+///
+/// # Panics
+///
+/// Panics if called outside of a Tokio runtime context.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use rust_grpc_lib::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
+/// use rust_grpc_lib::auth::FileTokenProvider;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), tonic::transport::Error> {
+///     let provider = FileTokenProvider::from_env()?;
+///     let client: AlarmCommandsClient<_> =
+///         rust_grpc_lib::pool::get("http://alarm-host:50051", provider)?;
+///     Ok(())
+/// }
+/// ```
+#[cfg(feature = "auth")]
+pub fn get<C: GrpcClient, P: TokenProvider>(endpoint: &str, provider: P) -> Result<C, Error> {
+    let channel = get_or_create_channel(endpoint, &POOL)?;
+    Ok(C::from_channel_with_interceptor(
+        channel,
+        ClientJwtInterceptor { provider },
+    ))
+}
+
+/// Return an **unauthenticated** gRPC client connected to `endpoint`, bypassing
+/// JWT auth entirely.
+///
+/// Only available when the `unauthenticated` feature is enabled. Intended for local
+/// development, integration tests, or environments where zero-trust auth is not
+/// required. **Do not use in production.**
 ///
 /// The channel is connected lazily: no network activity occurs until the first
 /// RPC is made on the returned client.
@@ -69,11 +130,14 @@ static POOL: LazyLock<ChannelMap> = LazyLock::new(RwLock::default);
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), tonic::transport::Error> {
-///     let client: AlarmCommandsClient<_> = rust_grpc_lib::pool::get("http://alarm-host:50051")?;
+///     // Only available with the `unauthenticated` feature enabled.
+///     let client: AlarmCommandsClient<_> =
+///         rust_grpc_lib::pool::get_unauthenticated("http://alarm-host:50051")?;
 ///     Ok(())
 /// }
 /// ```
-pub fn get<C: GrpcClient>(endpoint: &str) -> Result<C, Error> {
+#[cfg(feature = "unauthenticated")]
+pub fn get_unauthenticated<C: GrpcClient>(endpoint: &str) -> Result<C, Error> {
     let channel = get_or_create_channel(endpoint, &POOL)?;
     Ok(C::from_channel(channel))
 }
@@ -128,55 +192,4 @@ fn get_or_create_channel(endpoint: &str, pool: &ChannelMap) -> Result<Channel, E
 fn duration_from_env(var_name: &str, default_secs: u64) -> Duration {
     let seconds = env_var::get(var_name).or(default_secs);
     Duration::from_secs(seconds)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn empty_pool() -> ChannelMap {
-        RwLock::new(HashMap::new())
-    }
-
-    #[tokio::test]
-    async fn valid_endpoint_returns_ok() {
-        let pool = empty_pool();
-        let result = get_or_create_channel("http://localhost:50051", &pool);
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn invalid_endpoint_returns_err() {
-        let pool = empty_pool();
-        // An empty string is not a valid URI.
-        let result = get_or_create_channel("", &pool);
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn same_endpoint_reuses_channel() {
-        let pool = empty_pool();
-        let _ = get_or_create_channel("http://localhost:50051", &pool).unwrap();
-        let _ = get_or_create_channel("http://localhost:50051", &pool).unwrap();
-        // tonic::transport::Channel doesn't expose pointer equality directly,
-        // but we can assert the pool only has one entry — proving no second
-        // channel was created.
-        assert_eq!(pool.read().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn different_endpoints_get_different_channels() {
-        let pool = empty_pool();
-        let _ = get_or_create_channel("http://localhost:50051", &pool).unwrap();
-        let _ = get_or_create_channel("http://localhost:50052", &pool).unwrap();
-        assert_eq!(pool.read().unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn channel_is_inserted_into_pool() {
-        let pool = empty_pool();
-        assert!(pool.read().unwrap().is_empty());
-        get_or_create_channel("http://localhost:50051", &pool).unwrap();
-        assert!(pool.read().unwrap().contains_key("http://localhost:50051"));
-    }
 }

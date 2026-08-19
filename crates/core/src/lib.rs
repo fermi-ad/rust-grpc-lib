@@ -1,17 +1,26 @@
-//! gRPC connection pool and code-generation helpers for Controls group services.
+//! gRPC connection pool, zero-trust JWT authentication, and code-generation
+//! helpers for Controls group services.
 //!
-//! This library provides:
+//! This library serves three service archetypes:
 //!
-//! - **Code-generation helpers** — [`build_support::generate_protos`] (behind
-//!   the `build` feature) drives `tonic`/`prost` compilation of the bundled
-//!   `.proto` files and writes a `proto.rs` into your crate's `OUT_DIR`.
-//! - **Connection pooling** — a process-wide pool of lazily-connected channels
-//!   via [`pool::get`], so all callers share connections without coordinating
-//!   themselves.
-//! - **[`GrpcClient`] trait and derive macro** — a thin trait that all generated
-//!   tonic clients implement, enabling [`pool::get`] to construct any client type
-//!   from a shared channel. The `#[derive(GrpcClient)]` macro is re-exported here
-//!   for the rare case where you need to implement the trait on a custom wrapper.
+//! - **Middle-layer services** — validate incoming user JWTs with
+//!   [`auth::JwtValidationLayer`], enforce role-based access control via
+//!   `#[grpc_service]` / `#[roles(...)]`, and forward the upstream token to
+//!   downstream gRPC services using [`auth::ForwardedTokenInterceptor`].
+//! - **Edge/hardware services** — authenticate outbound calls with a
+//!   platform-injected token file via [`auth::FileTokenProvider`] and
+//!   [`pool::get`].
+//! - **Test harnesses** — bypass auth entirely with [`pool::get_unauthenticated`]
+//!   (requires the `unauthenticated` feature).
+//!
+//! # Feature flags
+//!
+//! | Feature | Default | Description |
+//! |---|---|---|
+//! | `auth` | ✅ on | Enables JWT auth; [`pool::get`] requires a [`auth::TokenProvider`] |
+//! | `jwks-url` | off | Enables live JWKS rotation via [`auth::JwksValidator`] (opt-in) |
+//! | `unauthenticated` | off | Enables [`pool::get_unauthenticated`] with no auth; for test harnesses only |
+//! | `build` | off | Enables proto code-generation helpers ([`build_support`] module) |
 //!
 //! # Code generation is the consumer's responsibility
 //!
@@ -41,17 +50,40 @@
 //! This library requires a [Tokio](https://tokio.rs) runtime. Tonic's transport
 //! layer is built on Tokio; there is no way to use it without one.
 //!
-//! # Quick start
+//! # Quick start — middle-layer service
 //!
-//! After setting up code generation (see above), call [`pool::get`] with the
-//! desired client type and endpoint:
+//! After setting up code generation (see above), install [`auth::JwtValidationLayer`]
+//! on your server and use [`pool::get`] with [`auth::ForwardedTokenInterceptor`]
+//! to call downstream services:
 //!
 //! ```rust,ignore
-//! // `proto` is the module you set up with include!(concat!(env!("OUT_DIR"), "/proto.rs"))
-//! use crate::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
+//! use std::sync::Arc;
+//! use rust_grpc_lib::auth::{
+//!     StaticKeysValidator, StaticKeysValidatorConfig,
+//!     JwtValidationLayer, ForwardedTokenInterceptor,
+//! };
 //!
-//! // Inside #[tokio::main] or any async context:
-//! let client: AlarmCommandsClient<_> = rust_grpc_lib::pool::get("http://alarm-commands-host:50051")?;
+//! // Reads AUTH_JWKS_FILE or AUTH_PEM_FILE; optionally AUTH_ISSUER
+//! let validator = Arc::new(StaticKeysValidator::new(StaticKeysValidatorConfig::from_env()?)?);
+//!
+//! tonic::transport::Server::builder()
+//!     .layer(JwtValidationLayer::new(validator))
+//!     .add_service(MyServiceServer::new(MyService))
+//!     .serve("[::1]:50051".parse()?)
+//!     .await?;
+//! ```
+//!
+//! # Quick start — edge/hardware service
+//!
+//! Use [`auth::FileTokenProvider`] to authenticate outbound calls with a
+//! platform-injected token file:
+//!
+//! ```rust,ignore
+//! use rust_grpc_lib::auth::FileTokenProvider;
+//!
+//! // Reads SERVICE_TOKEN_FILE; caches for SERVICE_TOKEN_CACHE_TTL_SECS (default 30 s)
+//! let provider = FileTokenProvider::from_env()?;
+//! let client: MyServiceClient<_> = rust_grpc_lib::pool::get("http://host:50051", provider)?;
 //! ```
 //!
 //! # Connection pooling
@@ -91,17 +123,29 @@
 //!
 //! Keepalive pings are also sent while the connection is idle.
 
+#[cfg(feature = "auth")]
+use tonic::service::Interceptor;
 use tonic::transport::Channel;
-
-/// Re-export of the [`GrpcClient`] derive macro so consumers can use
-/// `#[derive(rust_grpc_lib::GrpcClient)]` without adding a separate
-/// dependency on the proc-macro crate.
-pub use grpc_client_macro::GrpcClient;
 
 #[cfg(any(feature = "build", doc, test))]
 pub mod build_support;
 
 pub mod pool;
+
+/// Auth primitives — JWT interceptors, validation layers, and re-exports from
+/// `rust-auth-lib`. Available when the `auth` feature is enabled (the default).
+#[cfg(feature = "auth")]
+pub mod auth;
+
+/// Re-export of the [`GrpcClient`] derive macro so consumers can use
+/// `#[derive(rust_grpc_lib::GrpcClient)]` without adding a separate
+/// dependency on the proc-macro crate.
+pub use grpc_macro::GrpcClient;
+
+/// Re-export of the `grpc_service` proc macro for annotating gRPC service
+/// implementations with JWT auth wiring.
+#[cfg(feature = "auth")]
+pub use grpc_macro::grpc_service;
 
 /// Marker trait for gRPC client types that can be constructed from a [`Channel`].
 ///
@@ -117,4 +161,15 @@ pub mod pool;
 pub trait GrpcClient: Sized {
     /// Construct a client from an existing [`Channel`].
     fn from_channel(channel: Channel) -> Self;
+
+    /// Construct a client from an existing [`Channel`] wrapped with a
+    /// [`Interceptor`].
+    ///
+    /// Used by [`pool::get`] when the `auth` feature is active to attach a
+    /// [`crate::auth::interceptor::ClientJwtInterceptor`] to every outbound
+    /// request.
+    #[cfg(feature = "auth")]
+    fn from_channel_with_interceptor<I>(channel: Channel, interceptor: I) -> Self
+    where
+        I: Interceptor + Send + Sync + 'static;
 }

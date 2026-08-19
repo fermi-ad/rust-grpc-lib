@@ -1,3 +1,6 @@
+//! Tests for the `proto_rs` module — covers `segment_to_mod_name`, `build_tree`,
+//! and the `ProtoRsGenerator::generate` output.
+
 use super::*;
 
 fn plain() -> ProtoRsGenerator {
