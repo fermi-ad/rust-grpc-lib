@@ -1,120 +1,68 @@
-//! gRPC connection pool and code-generation helpers for Controls group services.
+//! Root of the `rust-grpc-lib` crate.
 //!
-//! This library provides:
+//! Declares the public module tree and re-exports the proc-macro entry points
+//! from `grpc-macro` so consumers never need a direct dependency on that crate.
 //!
-//! - **Code-generation helpers** — [`build_support::generate_protos`] (behind
-//!   the `build` feature) drives `tonic`/`prost` compilation of the bundled
-//!   `.proto` files and writes a `proto.rs` into your crate's `OUT_DIR`.
-//! - **Connection pooling** — a process-wide pool of lazily-connected channels
-//!   via [`pool::get`], so all callers share connections without coordinating
-//!   themselves.
-//! - **[`GrpcClient`] trait and derive macro** — a thin trait that all generated
-//!   tonic clients implement, enabling [`pool::get`] to construct any client type
-//!   from a shared channel. The `#[derive(GrpcClient)]` macro is re-exported here
-//!   for the rare case where you need to implement the trait on a custom wrapper.
+//! # Modules
 //!
-//! # Code generation is the consumer's responsibility
-//!
-//! This library does **not** expose a `proto` module of its own. Instead, you
-//! call [`build_support::generate_protos`] from your own `build.rs`, then
-//! include the output in your crate:
-//!
-//! ```rust,ignore
-//! // build.rs
-//! use rust_grpc_lib::build_support::{ Config, generate_protos };
-//!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let config = Config::new();
-//!     // < optional calls to configure custom attributes here >
-//!     generate_protos(config)?;
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ```rust,ignore
-//! // src/proto.rs  (or inline in src/lib.rs)
-//! include!(concat!(env!("OUT_DIR"), "/proto.rs"));
-//! ```
-//!
-//! # Runtime requirement
-//!
-//! This library requires a [Tokio](https://tokio.rs) runtime. Tonic's transport
-//! layer is built on Tokio; there is no way to use it without one.
-//!
-//! # Quick start
-//!
-//! After setting up code generation (see above), call [`pool::get`] with the
-//! desired client type and endpoint:
-//!
-//! ```rust,ignore
-//! // `proto` is the module you set up with include!(concat!(env!("OUT_DIR"), "/proto.rs"))
-//! use crate::proto::services::alarm_commands::alarm_commands_client::AlarmCommandsClient;
-//!
-//! // Inside #[tokio::main] or any async context:
-//! let client: AlarmCommandsClient<_> = rust_grpc_lib::pool::get("http://alarm-commands-host:50051")?;
-//! ```
-//!
-//! # Connection pooling
-//!
-//! Channels are keyed by the endpoint string. Calling [`pool::get`] multiple
-//! times with the same endpoint returns clients that share the same underlying
-//! channel. Connections are established lazily on the first RPC, not at the
-//! time [`pool::get`] is called.
-//!
-//! # Adding derive macros to generated types
-//!
-//! If you need generated structs or enums to implement additional traits (e.g.
-//! `serde::Serialize`), make the relevant calls on your [`Config`](crate::build_support::Config) before building:
-//!
-//! ```rust,ignore
-//! // build.rs
-//! use rust_grpc_lib::build_support::{ Config, generate_protos };
-//!
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let mut config = Config::new();
-//!     config = config.type_attribute("some.package", "#[derive(my_macro)]");
-//!     config = config.client_attribute("other.package", "#[derive(client_only_macro)]");
-//!     generate_protos(config)?;
-//!     Ok(())
-//! }
-//! ```
-//!
-//! # Keepalive configuration
-//!
-//! HTTP/2 keepalive probes are sent on every channel. The timing can be
-//! overridden at runtime via environment variables:
-//!
-//! | Variable | Default | Meaning |
+//! | Module | Feature gate | Purpose |
 //! |---|---|---|
-//! | `RUST_GRPC_LIB_KEEP_ALIVE_INTERVAL_SECS` | `30` | Seconds between keepalive pings |
-//! | `RUST_GRPC_LIB_KEEP_ALIVE_TIMEOUT_SECS` | `10` | Seconds to wait for a keepalive ping acknowledgement before closing the connection |
+//! | [`auth`] | `auth` (default) | JWT interceptors, validation layer, token sources |
+//! | [`build_support`] | `build` | Proto code-generation helpers for `build.rs` |
+//! | [`pool`] | always | Process-wide lazily-connected channel pool |
 //!
-//! Keepalive pings are also sent while the connection is idle.
+//! # Re-exported macros
+//!
+//! | Item | Feature gate | What it generates |
+//! |---|---|---|
+//! | [`GrpcClient`] | `auth` (default) | `from_endpoint_with_provider` on tonic client structs |
+//! | [`GrpcNoAuthClient`] | `unauthenticated` | `from_endpoint` (no-auth) on tonic client structs |
+//! | [`keycloak_authenticated_service`] | `auth` (default) | Role-checking guards on `impl Trait for Type` blocks |
+//!
+//! See each module and the `grpc-macro` crate for full documentation.
 
-use tonic::transport::Channel;
+/// JWT interceptors, validation layer, and re-exports from `rust-auth-lib`.
+///
+/// Enabled by the `auth` feature (on by default). See [`auth`] for the full
+/// list of re-exported types and the two sub-modules it contains:
+/// [`auth::interceptor`] and [`auth::layer`].
+#[cfg(any(feature = "auth", doc, test))]
+pub mod auth;
 
-/// Re-export of the [`GrpcClient`] derive macro so consumers can use
-/// `#[derive(rust_grpc_lib::GrpcClient)]` without adding a separate
-/// dependency on the proc-macro crate.
-pub use grpc_client_macro::GrpcClient;
-
+/// Build-time helpers for compiling the bundled `.proto` definitions into Rust.
+///
+/// Enabled by the `build` feature (off by default). The sole public entry
+/// point is [`build_support::generate_protos`], called from a consumer's
+/// `build.rs`.
 #[cfg(any(feature = "build", doc, test))]
 pub mod build_support;
 
+/// Process-wide gRPC channel pool.
+///
+/// The sole public function is [`pool::get_channel`]. Consumers do not
+/// typically call it directly — the constructors generated by [`GrpcClient`]
+/// and [`GrpcNoAuthClient`] call it internally.
 pub mod pool;
 
-/// Marker trait for gRPC client types that can be constructed from a [`Channel`].
+/// Derive macro that generates `from_endpoint_with_provider` on a tonic client
+/// struct, wiring it into [`pool::get_channel`] with JWT auth.
 ///
-/// All generated tonic service clients implement this trait automatically via
-/// the bundled `#[derive(GrpcClient)]` macro — you do not need to implement it
-/// yourself unless you are wrapping a generated client in your own newtype.
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement `GrpcClient`",
-    label = "`{Self}` is not a generated service client from this library",
-    note = "Client types generated by rust-grpc-lib implement GrpcClient by default. \
-        Manually implement it for your client if it is not from rust-grpc-lib."
-)]
-pub trait GrpcClient: Sized {
-    /// Construct a client from an existing [`Channel`].
-    fn from_channel(channel: Channel) -> Self;
-}
+/// Applied automatically by [`build_support::Config::new`] to every generated
+/// client. Re-exported here so consumers can also apply it to custom wrapper
+/// types without a direct dependency on `grpc-macro`.
+#[cfg(any(feature = "auth", doc, test))]
+pub use grpc_macro::GrpcClient;
+
+/// Derive macro that generates `from_endpoint` (no-auth) on a tonic client
+/// struct. Intended for test harnesses only; requires the `unauthenticated`
+/// feature.
+#[cfg(any(feature = "unauthenticated", doc, test))]
+pub use grpc_macro::GrpcNoAuthClient;
+
+/// Attribute macro applied to `impl Trait for Type` blocks that injects
+/// Keycloak role-checking guards into methods annotated with `#[roles(...)]`.
+///
+/// Re-exported here so consumers can write `#[rust_grpc_lib::authenticated_service]`
+/// without a direct dependency on `grpc-macro`.
+#[cfg(any(feature = "auth", doc, test))]
+pub use grpc_macro::keycloak_authenticated_service;

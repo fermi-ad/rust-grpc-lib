@@ -1,0 +1,17 @@
+[package]
+name = "integration_tests"
+version = "0.1.0"
+edition = "2024"
+publish = false # Prevent accidental publishing to crates.io
+
+[dev-dependencies]
+rust-grpc-lib = { path = "../core", features = ["unauthenticated"] }
+jsonwebtoken = "11"
+prost = "0.14"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net"] }
+rust-auth-lib = { git = "https://github.com/fermi-ad/rust-auth-lib", tag = "v0.4.0", features = ["test-fixtures"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic = { version = "0.14", features = ["transport"] }
+serde_json = "1"
+tonic-prost = "0.14"
+
