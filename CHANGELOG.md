@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.1.0] — 2026-08-24
+
+### Changed  
+
+- **Updated the pin of interface-definitions.** The latest commit to main includes the `WScan.proto` file that used to live in `extapi-acsys`. It is now exposed here.
+
+---
+
 ## [4.0.0] — 2026-08-18
 
 ### Breaking Changes
