@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [5.0.0] — 2026-09-01
+
+### Changed  
+
+- **Updated the pin of interface-definitions.** The latest commit to main removes a duplicated `repeated` term in the UNR `RelationshipResponse` message definition.
+
+---
+
 ## [4.1.0] — 2026-08-24
 
 ### Changed  
