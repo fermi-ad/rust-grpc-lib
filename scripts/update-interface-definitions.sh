@@ -1,10 +1,16 @@
 #!/bin/bash
 
+# ============== Variables ===================
+
 CARGO_PATH="crates/core/Cargo.toml"
 CRATE_VERSION_SEARCH_STRING="version = "
+CURRENT_VERSION=""
+SED_CONFIG=""
 UPDATE_TYPE=""
+UPDATED_VERSION=""
 
-# Help function
+# ============== Initialization ==============
+
 usage() {
 	echo "Usage: $0 [--minor | --major]"
 	exit 1
@@ -37,7 +43,7 @@ while [[ $# -gt 0 ]]; do
             ;;
 		*)
 		    echo "Unknown argument: $1"
-			exit 1
+			usage
 			;;
 	esac
 done
@@ -47,6 +53,18 @@ if [ -z "$UPDATE_TYPE" ]; then
     echo "Error: --major or --minor must be specified"
     usage
 fi
+
+# Configure the sed commands (different between Mac and Linux)
+case "$(uname -s)" in
+    Darwin) SED_CONFIG="'' " ;;
+	Linux) SED_CONFIG="" ;;
+	*) 
+	    echo "Error: Unable to run on $(uname -s) operating system." >&2
+		exit 1
+		;;
+esac
+
+# ================= Core logic =======================
 
 # Make everything relative to the project root. Anchor on this script's location.
 cd "$(dirname "$0")/.."
@@ -77,7 +95,7 @@ UPDATED_VERSION="${major}.${minor}.${patch}"
 
 echo "Updating from version $CURRENT_VERSION to version $UPDATED_VERSION"
 
-sed -i "s|$CRATE_VERSION_SEARCH_STRING\"$CURRENT_VERSION\"|$CRATE_VERSION_SEARCH_STRING\"$UPDATED_VERSION\"|" "$CARGO_PATH"
+sed -i $SED_CONFIG"s|$CRATE_VERSION_SEARCH_STRING\"$CURRENT_VERSION\"|$CRATE_VERSION_SEARCH_STRING\"$UPDATED_VERSION\"|" "$CARGO_PATH"
 cargo update
 
 echo "Pulling the latest version of interface-definitions"
