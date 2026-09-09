@@ -1,6 +1,6 @@
 # rust-grpc-lib
 
-The latest documentation for this crate [can be found here](https://fuzzy-adventure-5v1nq96.pages.github.io/rust_grpc_lib/index.html)
+The latest documentation for this crate [can be found here](https://fermi-ad.github.io/rust-grpc-lib/rust_grpc_lib/index.html)
 
 A Rust library for building gRPC services in the Controls group. It handles three things so you don't have to:
 
