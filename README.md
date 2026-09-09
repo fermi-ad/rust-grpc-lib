@@ -306,6 +306,21 @@ cargo build
 cargo test
 ```
 
+### Integrating new versions of `interface-definitions`
+
+If you are simply here to integrate the latest Protobuf definitions from `interface-definitions`, there's a handy script you can run.
+
+First, make sure you know what changes you're expecting to bring in from `interface-definitions`. Evaluate whether any existing consumers of this crate will be exposed to breaking changes after the integration is complete. If so, this is a major version change. If not, it is a minor version change.
+
+```bash
+# From the project root
+./scripts/update-interface-definitions.sh --minor # pass --major instead if making a breaking change
+```
+
+That script will pull the latest version of `interface-definitions` and update the relevant `Cargo.toml` with the next version.
+
+Don't forget to make sure a matching tag is added to the repository once your changes are merged to `main`! (Auto-tagging coming soon)
+
 ### Repository layout
 
 This is a Cargo workspace with three crates:
