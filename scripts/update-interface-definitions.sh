@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CARGO_PATH="../crates/core/Cargo.toml"
+CARGO_PATH="crates/core/Cargo.toml"
 CRATE_VERSION_SEARCH_STRING="version = "
 UPDATE_TYPE=""
 
@@ -48,8 +48,8 @@ if [ -z "$UPDATE_TYPE" ]; then
     usage
 fi
 
-# Make everything relative to this script's location
-cd "$(dirname "$0")"
+# Make everything relative to the project root. Anchor on this script's location.
+cd "$(dirname "$0")/.."
 
 # Calculate next version 
 CURRENT_VERSION=$(sed -n "s/^$CRATE_VERSION_SEARCH_STRING\"\(.*\)\"/\1/p" "$CARGO_PATH")
