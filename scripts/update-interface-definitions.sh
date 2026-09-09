@@ -11,6 +11,9 @@ UPDATED_VERSION=""
 
 # ============== Initialization ==============
 
+# Fail if any command has nonzero exit
+set -e
+
 usage() {
 	echo "Usage: $0 [--minor | --major]"
 	exit 1
