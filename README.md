@@ -319,6 +319,8 @@ First, make sure you know what changes you're expecting to bring in from `interf
 
 That script will pull the latest version of `interface-definitions` and update the relevant `Cargo.toml` with the next version.
 
+**New** There is also a GitHub Workflow in this repository to run this operation for you. Simply go to the Actions tab and initiate the "Bump Interface Definitions" workflow. It will run the script and commit the changes to a new branch. A PR will automatically be opened for you to update and add reviewers.
+
 Don't forget to make sure a matching tag is added to the repository once your changes are merged to `main`! (Auto-tagging coming soon)
 
 ### Repository layout
