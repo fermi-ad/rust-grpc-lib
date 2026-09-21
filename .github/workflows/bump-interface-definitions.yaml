@@ -10,9 +10,6 @@ on:
         - major
         - minor 
 
-env:
-  GH_TOKEN: "${{ github.token }}"
-
 permissions:
   contents: write
   pull-requests: write
@@ -43,6 +40,8 @@ jobs:
         run: scripts/update-interface-definitions.sh --${{ inputs.version_change }}
 
       - name: Open pull request
+        env:
+          GH_TOKEN: "${{ steps.app-token.outputs.token }}"
         run: |
           # Configure Git
           git config --global user.name "github-actions[bot]"
