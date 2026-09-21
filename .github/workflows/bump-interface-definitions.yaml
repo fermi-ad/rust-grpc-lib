@@ -1,0 +1,50 @@
+name: Bump Interface Definitions
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_change:
+        required: true
+        type: choice
+        options:
+        - major
+        - minor 
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-interfaces:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      
+      - name: Run update script 
+        run: scripts/update-interface-definitions.sh --${{ inputs.version_change }}
+
+      - name: Open pull request
+        run: |
+          # Configure Git
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create and switch to branch
+          git checkout -b interface-update/${{ github.actor }}/${{ github.run_number }}
+
+          # Commit changes
+          git commit -a -m "Interface definitions updated from workflow"
+
+          # Push
+          git push origin interface-update/${{ github.actor }}/${{ github.run_number }}
+          
+          # Create PR 
+          gh pr create \
+            --title "Automated Interface Update" \
+            --body "Automated PR created from the Bump Interface Definitions workflow" \
+            --base main \
+            --head interface-update/${{ github.actor }}/${{ github.run_number }}
