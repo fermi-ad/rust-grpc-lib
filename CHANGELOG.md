@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.1.0] — 2026-09-28
+
+### Added
+
+- Added generated support for the signed and unsigned 64-bit scalar and array variants in `common.device.Value`:
+  `Value::Int(i64)`, `Value::Uint(u64)`, `Value::IntArr(Int64Array)`, and
+  `Value::UintArr(Uint64Array)`.
+
+### Changed
+
+- Updated the bundled `interface-definitions` submodule to the revision containing interface-definitions#118.
+- Added committed generation fixtures and protobuf round-trip coverage for the new 64-bit value variants.
+
+---
+
 ## [5.0.0] — 2026-09-01
 
 ### Changed  
