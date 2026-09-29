@@ -10,6 +10,8 @@
 //!   expansion (role checks, missing claims, `any`/`all` variants).
 //! - [`integration_round_trip`] — full client→server gRPC round-trip tests
 //!   using a real tonic server on a loopback port with `JwtValidationLayer`.
+//! - [`common_device_value`] — generated API and protobuf round-trip tests for
+//!   `common.device.Value`, including 64-bit integer variants.
 //!
 //! # Proto fixtures
 //!
@@ -26,9 +28,22 @@
 //! submodule, run `bash scripts/gen-test-fixtures.sh`.
 
 #[cfg(test)]
+mod common_device_value;
+#[cfg(test)]
 mod integration_round_trip;
 #[cfg(test)]
 mod keycloak_authenticated_service_macro;
+
+#[cfg(test)]
+pub mod common {
+    pub mod device {
+        #![allow(clippy::all)]
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fixtures/common.device.rs"
+        ));
+    }
+}
 
 #[cfg(test)]
 pub mod google {

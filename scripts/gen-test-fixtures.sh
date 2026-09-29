@@ -2,7 +2,7 @@
 # scripts/gen-test-fixtures.sh
 #
 # Generates the Rust proto fixtures used by the integration tests in
-# crates/integration_tests/src/integration_round_trip.rs.
+# crates/integration_tests/src/.
 #
 # The generated files are committed to the repository so that `cargo test`
 # does not require a build.rs or a live protoc invocation.
@@ -75,16 +75,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("vendored protoc must be available");
     unsafe { std::env::set_var("PROTOC", protoc); }
 
-    // Compile the grpc-db-template example proto — it has simple unary RPCs,
-    // no deprecated fields, and only imports google/protobuf/timestamp.proto
-    // (a well-known type bundled with tonic-prost-build).
+    // Compile the grpc-db-template example proto and common.device.Value.
+    // The example proto has simple unary RPCs and only imports
+    // google/protobuf/timestamp.proto (a well-known type bundled with
+    // tonic-prost-build). Compiling device.proto directly provides a
+    // committed fixture for the generated common.device API.
     tonic_prost_build::configure()
         .compile_well_known_types(true)
         .client_attribute(".", "#[derive(::rust_grpc_lib::GrpcClient)]")
         .client_attribute(".", "#[derive(::rust_grpc_lib::GrpcNoAuthClient)]")
         .out_dir(&out_dir)
         .compile_protos(
-            &[proto_dir.join("controls/service/grpc-db-template/v1/example.proto")],
+            &[
+                proto_dir.join("controls/service/grpc-db-template/v1/example.proto"),
+                proto_dir.join("controls/common/v1/device.proto"),
+            ],
             &[interface_dir.clone()],
         )?;
 
