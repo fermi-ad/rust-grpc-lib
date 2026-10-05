@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.1.0] — 2026-10-05
+
+### Changed
+
+- **Updated the pin of interface-definitions.** This routine integration adds the BLM gRPC service and expands `common.device.Value` to support signed and unsigned 64-bit integers, both as individual values and arrays.
+
+---
+
+## [7.0.0] — 2026-09-21
+
+### Breaking Changes
+
+- **Updated the pin of interface-definitions.** The UNR [`ReadRelationshipRequest.ids`](crates/core/interface-definitions/proto/controls/service/grpc-unr/relationship.proto:29) field was renamed from its singular form. Update callers using the generated request field; its Protobuf field number is unchanged.
+
+### Added
+
+- **Automated interface-definition updates.** Added an [update script](scripts/update-interface-definitions.sh) for major and minor version bumps and a [GitHub Actions workflow](.github/workflows/bump-interface-definitions.yaml) that opens an update pull request. The [README](README.md) documents both workflows.
+
+---
+
+## [6.0.0] — 2026-09-09
+
+### Breaking Changes
+
+- **Updated the pin of interface-definitions.** Reworked the UNR interfaces: the old BaseInfo and RelationshipInfo services and their versioned Protobuf files were replaced by [`EntityService`](crates/core/interface-definitions/proto/controls/service/grpc-unr/entity.proto:7) and [`RelationshipService`](crates/core/interface-definitions/proto/controls/service/grpc-unr/relationship.proto:7). Migrate generated clients and request/response types to the new services and packages.
+
+---
+
 ## [5.0.0] — 2026-09-01
 
 ### Changed  
