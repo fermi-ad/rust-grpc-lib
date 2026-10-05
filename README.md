@@ -314,12 +314,12 @@ First, make sure you know what changes you're expecting to bring in from `interf
 
 ```bash
 # From the project root
-./scripts/update-interface-definitions.sh --minor # pass --major instead if making a breaking change
+./scripts/update-interface-definitions.sh --minor --description "Describe the new interfaces" # pass --major instead if making a breaking change
 ```
 
-That script will pull the latest version of `interface-definitions` and update the relevant `Cargo.toml` with the next version.
+That script will pull the latest version of `interface-definitions`, update the relevant `Cargo.toml` with the next version, and add the description to the changelog.
 
-**New** There is also a GitHub Workflow in this repository to run this operation for you. Simply go to the Actions tab and initiate the "Bump Interface Definitions" workflow. It will run the script and commit the changes to a new branch. A PR will automatically be opened for you to update and add reviewers.
+**New** There is also a GitHub Workflow in this repository to run this operation for you. Simply go to the Actions tab and initiate the "Bump Interface Definitions" workflow. Select the version change and provide a description of the new interfaces. It will run the script and commit the changes to a new branch. A PR will automatically be opened for you to update and add reviewers.
 
 Don't forget to make sure a matching tag is added to the repository once your changes are merged to `main`! (Auto-tagging coming soon)
 
