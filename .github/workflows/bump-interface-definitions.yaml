@@ -46,7 +46,7 @@ jobs:
           CHANGE_DESCRIPTION: ${{ inputs.change_description }}
         run: |
           scripts/update-interface-definitions.sh --${{ inputs.version_change }} --description "$CHANGE_DESCRIPTION"
-          version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' crates/core/Cargo.toml)
+          version=$(sed -n '/^version = "[^"]*"/ { s/^version = "\([^"]*\)".*/\1/; p; q; }' crates/core/Cargo.toml)
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Open pull request

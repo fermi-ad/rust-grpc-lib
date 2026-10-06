@@ -131,14 +131,16 @@ if [ -z "$first_entry" ]; then
     exit 1
 fi
 
-updated_changelog=$(mktemp)
+# Build alongside the changelog so the final rename is atomic, and preserve its permissions.
+updated_changelog=$(mktemp ./CHANGELOG.md.XXXXXX)
 trap 'rm -f "$updated_changelog"' EXIT
+cp -p CHANGELOG.md "$updated_changelog"
 {
     head -n "$((first_entry - 1))" CHANGELOG.md
     printf '## [%s] — %s\n\n### %s\n\n- **Updated the pin of interface-definitions.** %s\n\n---\n\n' \
         "$UPDATED_VERSION" "$(date -u +%F)" "$category" "$CHANGE_DESCRIPTION"
     tail -n "+$first_entry" CHANGELOG.md
 } > "$updated_changelog"
-cat "$updated_changelog" > CHANGELOG.md
+mv "$updated_changelog" CHANGELOG.md
 
 echo "Update complete"
