@@ -8,7 +8,11 @@ on:
         type: choice
         options:
         - major
-        - minor 
+        - minor
+      change_description:
+        description: Describe the interface-definition changes being integrated
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -20,7 +24,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -36,12 +40,20 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
       
-      - name: Run update script 
-        run: scripts/update-interface-definitions.sh --${{ inputs.version_change }}
+      - name: Run update script
+        id: update
+        env:
+          CHANGE_DESCRIPTION: ${{ inputs.change_description }}
+        run: |
+          scripts/update-interface-definitions.sh --${{ inputs.version_change }} --description "$CHANGE_DESCRIPTION"
+          version=$(sed -n '/^version = "[^"]*"/ { s/^version = "\([^"]*\)".*/\1/; p; q; }' crates/core/Cargo.toml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Open pull request
         env:
-          GH_TOKEN: "${{ steps.app-token.outputs.token }}"
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CHANGE_DESCRIPTION: ${{ inputs.change_description }}
+          NEW_VERSION: ${{ steps.update.outputs.version }}
         run: |
           # Configure Git
           git config --global user.name "github-actions[bot]"
@@ -55,10 +67,15 @@ jobs:
 
           # Push
           git push origin interface-update/${{ github.actor }}/${{ github.run_number }}
-          
-          # Create PR 
+
+          # Create PR
+          pr_body=$(mktemp)
+          trap 'rm -f "$pr_body"' EXIT
+          printf '%s\n\n%s\n' \
+            "Automated PR created from the Bump Interface Definitions workflow for version ${NEW_VERSION}." \
+            "$CHANGE_DESCRIPTION" > "$pr_body"
           gh pr create \
-            --title "Automated Interface Update" \
-            --body "Automated PR created from the Bump Interface Definitions workflow" \
+            --title "Automated Interface Update to v${NEW_VERSION}" \
+            --body-file "$pr_body" \
             --base main \
             --head interface-update/${{ github.actor }}/${{ github.run_number }}

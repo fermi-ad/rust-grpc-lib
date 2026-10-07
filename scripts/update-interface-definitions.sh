@@ -8,6 +8,7 @@ CURRENT_VERSION=""
 SED_CONFIG=""
 UPDATE_TYPE=""
 UPDATED_VERSION=""
+CHANGE_DESCRIPTION=""
 
 # ============== Initialization ==============
 
@@ -15,7 +16,7 @@ UPDATED_VERSION=""
 set -e
 
 usage() {
-	echo "Usage: $0 [--minor | --major]"
+	echo "Usage: $0 [--minor | --major] --description \"Description of interface changes\""
 	exit 1
 }
 
@@ -41,6 +42,14 @@ while [[ $# -gt 0 ]]; do
 			echo "Updating interface-definitions and moving to next MAJOR version"
 			shift
             ;;
+        --description)
+            if [ $# -lt 2 ]; then
+                echo "Error: --description requires a value" >&2
+                usage
+            fi
+            CHANGE_DESCRIPTION="$2"
+            shift 2
+            ;;
         -h|--help)
 			usage
             ;;
@@ -54,6 +63,11 @@ done
 # Check if the type flag was provided
 if [ -z "$UPDATE_TYPE" ]; then
     echo "Error: --major or --minor must be specified"
+    usage
+fi
+
+if [ -z "${CHANGE_DESCRIPTION//[[:space:]]/}" ]; then
+    echo "Error: --description must contain a description of the changes" >&2
     usage
 fi
 
@@ -104,5 +118,29 @@ cargo update
 echo "Pulling the latest version of interface-definitions"
 
 git submodule update --remote --recursive
+
+if [ "$UPDATE_TYPE" = "MAJOR" ]; then
+    category="Breaking Changes"
+else
+    category="Changed"
+fi
+
+first_entry=$(grep -n -m 1 '^## \[' CHANGELOG.md | cut -d: -f1)
+if [ -z "$first_entry" ]; then
+    echo "Error: Cannot find a version heading in CHANGELOG.md" >&2
+    exit 1
+fi
+
+# Build alongside the changelog so the final rename is atomic, and preserve its permissions.
+updated_changelog=$(mktemp ./CHANGELOG.md.XXXXXX)
+trap 'rm -f "$updated_changelog"' EXIT
+cp -p CHANGELOG.md "$updated_changelog"
+{
+    head -n "$((first_entry - 1))" CHANGELOG.md
+    printf '## [%s] — %s\n\n### %s\n\n- **Updated the pin of interface-definitions.** %s\n\n---\n\n' \
+        "$UPDATED_VERSION" "$(date -u +%F)" "$category" "$CHANGE_DESCRIPTION"
+    tail -n "+$first_entry" CHANGELOG.md
+} > "$updated_changelog"
+mv "$updated_changelog" CHANGELOG.md
 
 echo "Update complete"
