@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.2.0] — 2026-10-16
+
+### Changed
+
+- **Updated the pin of interface-definitions.** Adds the order field to the UNR Entity message
+
+---
+
 ## [7.1.0] — 2026-10-05
 
 ### Changed
