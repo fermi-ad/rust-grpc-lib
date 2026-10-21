@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.3.0] — 2026-10-21
+
+### Changed
+
+- **Updated the pin of interface-definitions.** Adds the BLM `ListAvailableBeamLines` RPC and its request/response messages for querying the static `BeamLine` values available to BLM clients.
+
+---
+
 ## [7.2.0] — 2026-10-16
 
 ### Changed
