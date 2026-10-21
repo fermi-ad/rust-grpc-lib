@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "rust-grpc-lib"
-version = "7.2.0"
+version = "7.3.0"
 dependencies = [
  "grpc-macro",
  "protoc-bin-vendored",
