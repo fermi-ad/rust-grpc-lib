@@ -666,6 +666,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+ "tonic-health",
  "tonic-prost",
 ]
 
@@ -1331,7 +1332,7 @@ dependencies = [
 
 [[package]]
 name = "rust-grpc-lib"
-version = "7.5.0"
+version = "7.6.0"
 dependencies = [
  "grpc-macro",
  "protoc-bin-vendored",
@@ -1340,6 +1341,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost-build",
+ "tracing",
 ]
 
 [[package]]
@@ -1802,6 +1804,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1858,6 +1861,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "tonic-health"
+version = "0.14.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78ca1afa8326cc0dc9999e4f2861ff8532c6edacdb6cf775ab3984dcb3299529"
+dependencies = [
+ "prost",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-prost",
 ]
 
 [[package]]

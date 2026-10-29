@@ -7,8 +7,11 @@
 //!
 //! - [`interceptor`] — [`ClientJwtInterceptor`], the outbound client interceptor
 //!   that attaches `Bearer` tokens to every outgoing request.
-//! - [`layer`] — [`JwtValidationLayer`] / [`JwtValidationService`] and the
-//!   [`validator_into_layer`] constructor for server-side JWT validation.
+//! - [`layer`] — [`JwtValidationLayer`] / [`JwtValidationService`], the
+//!   [`validator_into_layer`], [`validator_into_interceptor`] and
+//!   [`wrap_service`] constructors for server-side JWT validation.
+//! - [`context`] — [`RequestContext`], the per-request bundle of message,
+//!   claims, metadata and extensions that handlers should use to read claims.
 //!
 //! # Re-exported items
 //!
@@ -31,6 +34,7 @@
 //! - `KeycloakClientCredentialsProvider` — requires a live Keycloak token
 //!   endpoint; use `rust-auth-lib` directly if needed.
 
+pub mod context;
 pub mod interceptor;
 pub mod layer;
 
@@ -57,8 +61,12 @@ pub use rust_auth_lib::TokenError;
 pub use rust_auth_lib::keycloak::KeycloakClaims;
 
 // gRPC-specific types from submodules
+pub use context::{RequestContext, RpcMethod};
 pub use interceptor::ClientJwtInterceptor;
-pub use layer::{JwtValidationLayer, validator_into_layer};
+pub use layer::{
+    JwtValidationLayer, JwtValidationService, validator_into_interceptor, validator_into_layer,
+    wrap_service,
+};
 use tonic::Request;
 
 #[cfg(test)]

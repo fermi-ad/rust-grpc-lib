@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.6.0] — 2026-10-29
+
+### Added
+
+- **`RequestContext<T, C = KeycloakClaims>`** in the new [`auth::context`](crates/core/src/auth/context.rs) module, re-exported from `rust_grpc_lib::auth`. It bundles the request message (or `Streaming<Req>`), the validated claims, metadata, extensions, `remote_addr` and an optional `rpc_method`. Build it with `RequestContext::try_from_request(request)`, and read claims with the `sub()`, `has_role()`, `exp_unix()` and `is_expired()` accessors. A missing claims extension fails closed with `Status::internal("authentication is not configured")`; the detail is logged server-side and is not sent to the client.
+- **`RpcMethod { service, method }`**, a library-owned type. `RequestContext::rpc_method` is `None` until something inserts an `RpcMethod` extension (no layer in this release does).
+- **Per-service auth constructors** in `auth::layer`, so a service can be authenticated without a global layer (for example to keep `tonic-health` open):
+  - `JwtValidationService::new(validator)` and `validator_into_interceptor::<C, V>(validator)` build the bare interceptor for a generated server's `with_interceptor`.
+  - `wrap_service::<C, V, S>(service, validator)` wraps a generated server without a direct `tower` dependency. The result keeps `NamedService`, so a health reporter's `set_serving::<..>()` still works.
+- **`tracing` feature**, enabled by `auth` (and so by default), adds an optional `tracing` dependency used to log misconfiguration server-side.
+- **Tests** for the context, the new constructors, and an in-process server with an unauthenticated health service next to an authenticated service (no-token health returns `Serving`, a no-token RPC returns `Unauthenticated`, and a valid token reaches the handler).
+
+### Changed
+
+- `JwtValidationService` now implements `Clone` for any `C` and `V` (only the `Arc` is cloned), and its fields stay private.
+- `Server::layer` with `validator_into_layer` still guards every service on the server, health included. There is deliberately no exemption mechanism; use `wrap_service` for services that must stay open. The module docs now say so.
+
+### Fixed
+
+- Doc comment in [`lib.rs`](crates/core/src/lib.rs) named `authenticated_service` instead of `keycloak_authenticated_service`.
+- Stale `block_in_place` comment in `JwtValidationService::call`; validation is synchronous.
+
+---
+
 ## [7.5.0] — 2026-10-28
 
 ### Changed
