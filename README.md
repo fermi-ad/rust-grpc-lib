@@ -159,6 +159,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Reading claims with `RequestContext`
+
+Instead of fishing the claims out of the request extensions, build a `RequestContext` at the top of a handler. It carries the message, the validated claims, metadata, extensions and the peer address:
+
+```rust
+use rust_grpc_lib::auth::RequestContext;
+
+async fn set_data(
+    &self,
+    request: Request<SetDataRequest>,
+) -> Result<Response<SetDataResponse>, Status> {
+    let ctx = RequestContext::try_from_request(request)?;
+    if !ctx.has_role("operator") {
+        return Err(Status::permission_denied("operator role required"));
+    }
+    tracing::info!(user = ctx.sub(), peer = ?ctx.remote_addr, "set_data");
+    let SetDataRequest { .. } = ctx.message;
+    todo!()
+}
+```
+
+`RequestContext<T, C = KeycloakClaims>` is generic over the claims type; `C` must implement `Claims` (and be `Clone` to call `try_from_request`). `has_role()` is only available for `KeycloakClaims`. `try_from_request` also works for streaming requests (`RequestContext<Streaming<Req>>`). `is_expired()` and `exp_unix()` let a long-lived stream decide when to end. If the JWT layer is not installed, it returns `Status::internal("authentication is not configured")` and logs the detail server-side only.
+
+### Keeping health checks open (per-service auth)
+
+`Server::layer(validator_into_layer(..))` wraps every service, so unauthenticated health probes are rejected too. There is no exemption list. To keep a service open, authenticate each application service individually and add the open service unwrapped:
+
+```rust
+use rust_grpc_lib::auth::{KeycloakClaims, wrap_service};
+
+let (mut reporter, health) = tonic_health::server::health_reporter();
+reporter.set_serving::<DaqServer<MyDaqService>>().await;
+
+tonic::transport::Server::builder()
+    .add_service(health) // no JWT required
+    .add_service(wrap_service::<KeycloakClaims, _, _>(
+        DaqServer::new(MyDaqService),
+        validator,
+    ))
+    .serve("[::1]:50051".parse()?)
+    .await?;
+```
+
+`wrap_service` needs no direct `tower` dependency and keeps `NamedService`, so `set_serving` keeps working. Equivalent: `DaqServer::with_interceptor(MyDaqService, JwtValidationService::<KeycloakClaims, _>::new(validator))`.
+
 ### Edge/hardware service
 
 Runs close to hardware and pushes data upstream. Authenticates itself using a platform-injected token file (e.g. a Vault or Kubernetes secret).
@@ -271,7 +316,8 @@ Marker attribute consumed by `#[keycloak_authenticated_service]`. Two variants:
 
 | Feature | Default | Description |
 |---|---|---|
-| `auth` | ✅ on | Enables JWT auth; generated clients gain `from_endpoint_with_provider` |
+| `auth` | ✅ on | Enables JWT auth; generated clients gain `from_endpoint_with_provider`. Also enables `tracing` |
+| `tracing` | ✅ on (via `auth`) | Adds the `tracing` dependency; misconfiguration detail from `RequestContext` is logged server-side |
 | `jwks-url` | off | Enables JWKS key retrieval and rotation from a URL via `KeyValidatorConfig::from_jwks_url` (opt-in; pulls in an HTTP client) |
 | `unauthenticated` | off | Enables `from_endpoint` (no-auth constructor) on generated clients; for test harnesses only |
 | `build` | off | Enables proto code-generation helpers (`build_support` module) |

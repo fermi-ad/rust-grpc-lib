@@ -10,17 +10,80 @@ use std::sync::Arc;
 use rust_auth_lib::{
     Claims, KeyValidator, KeyValidatorConfig, keycloak::KeycloakClaims, test_fixtures,
 };
-use tonic::Code;
+use tonic::{Code, server::NamedService};
+
+/// Minimal service used to check that `wrap_service` keeps `NamedService`.
+#[derive(Clone)]
+struct Named;
+
+impl NamedService for Named {
+    const NAME: &'static str = "pkg.Named";
+}
+
+/// Build an in-memory-JWKS validator.
+fn make_validator(kid: &str) -> Arc<KeyValidator> {
+    let jwks = test_fixtures::make_jwks_json_str(kid);
+    let config = KeyValidatorConfig::from_jwks_str(&jwks);
+    Arc::new(KeyValidator::new(config).expect("validator construction must succeed"))
+}
 
 /// Build a `JwtValidationService` backed by an in-memory JWKS.
 fn make_service(kid: &str) -> JwtValidationService<KeycloakClaims, KeyValidator> {
-    let jwks = test_fixtures::make_jwks_json_str(kid);
-    let config = KeyValidatorConfig::from_jwks_str(&jwks);
-    let validator = KeyValidator::new(config).expect("validator construction must succeed");
-    JwtValidationService {
-        _claims: PhantomData,
-        validator: Arc::new(validator),
-    }
+    JwtValidationService::new(make_validator(kid))
+}
+
+/// A request carrying a valid bearer token signed for `kid`.
+fn bearer_request(kid: &str) -> Request<()> {
+    let token = test_fixtures::make_token(Some(kid), 300, test_fixtures::RSA_PRIVATE_PEM);
+    let mut req = Request::new(());
+    req.metadata_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    req
+}
+
+fn name_of<S: NamedService>(_: &S) -> &'static str {
+    S::NAME
+}
+
+// -----------------------------------------------------------------------
+// Public constructor: new, clone
+// -----------------------------------------------------------------------
+#[test]
+fn new_builds_a_working_interceptor() {
+    const KID: &str = "ctor-kid";
+    let mut svc = JwtValidationService::<KeycloakClaims, _>::new(make_validator(KID));
+
+    let enriched = svc
+        .call(bearer_request(KID))
+        .expect("valid token must pass");
+    assert!(enriched.extensions().get::<KeycloakClaims>().is_some());
+
+    let err = svc
+        .call(Request::new(()))
+        .expect_err("missing header must fail");
+    assert_eq!(err.code(), Code::Unauthenticated);
+}
+
+#[test]
+fn interceptor_is_clone_without_clonable_validator_or_claims() {
+    // `KeyValidator` is not required to be `Clone`; only the `Arc` is cloned.
+    const KID: &str = "clone-kid";
+    let svc = JwtValidationService::<KeycloakClaims, _>::new(make_validator(KID));
+    let mut cloned = svc.clone();
+
+    cloned
+        .call(bearer_request(KID))
+        .expect("a cloned interceptor must validate tokens");
+}
+
+// -----------------------------------------------------------------------
+// wrap_service: the wrapped service is still a NamedService
+// -----------------------------------------------------------------------
+#[test]
+fn wrap_service_preserves_named_service() {
+    let wrapped = wrap_service::<KeycloakClaims, _, _>(Named, make_validator("named-kid"));
+
+    assert_eq!(name_of(&wrapped), "pkg.Named");
 }
 
 // -----------------------------------------------------------------------
