@@ -180,7 +180,7 @@ async fn set_data(
 }
 ```
 
-`try_from_request` also works for streaming requests (`RequestContext<Streaming<Req>>`). `is_expired()` and `exp_unix()` let a long-lived stream decide when to end. If the JWT layer is not installed, it returns `Status::internal("authentication is not configured")` and logs the detail server-side only.
+`RequestContext<T, C = KeycloakClaims>` is generic over the claims type; `C` must implement `Claims` (and be `Clone` to call `try_from_request`). `has_role()` is only available for `KeycloakClaims`. `try_from_request` also works for streaming requests (`RequestContext<Streaming<Req>>`). `is_expired()` and `exp_unix()` let a long-lived stream decide when to end. If the JWT layer is not installed, it returns `Status::internal("authentication is not configured")` and logs the detail server-side only.
 
 ### Keeping health checks open (per-service auth)
 

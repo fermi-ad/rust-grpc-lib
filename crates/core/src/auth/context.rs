@@ -43,13 +43,13 @@ mod tests;
 ///
 /// Construct it with [`RequestContext::try_from_request`]. `T` is the message
 /// type: the request message for unary RPCs, or `tonic::Streaming<Req>` for
-/// client- and bidirectional-streaming RPCs. `C` is the claims type and
-/// defaults to [`KeycloakClaims`].
+/// client- and bidirectional-streaming RPCs. `C` is the claims type; it must
+/// implement [`Claims`] and defaults to [`KeycloakClaims`].
 ///
 /// The claims are *cloned* out of the request extensions, so
 /// [`extensions`](Self::extensions) still contains them.
 #[derive(Debug)]
-pub struct RequestContext<T, C = KeycloakClaims> {
+pub struct RequestContext<T, C: Claims = KeycloakClaims> {
     /// The validated claims inserted by the JWT validation layer.
     pub claims: C,
     /// The request message (or request stream).
@@ -65,7 +65,7 @@ pub struct RequestContext<T, C = KeycloakClaims> {
     pub rpc_method: Option<RpcMethod>,
 }
 
-impl<T, C> RequestContext<T, C> {
+impl<T, C: Claims> RequestContext<T, C> {
     /// Build a context from an incoming request.
     ///
     /// The remote address is read before the request is taken apart, because
@@ -79,7 +79,7 @@ impl<T, C> RequestContext<T, C> {
     /// the request extensions. See the [module docs](self).
     pub fn try_from_request(request: Request<T>) -> Result<Self, Status>
     where
-        C: Clone + Send + Sync + 'static,
+        C: Clone,
     {
         let remote_addr = request.remote_addr();
         let (metadata, extensions, message) = request.into_parts();
@@ -110,10 +110,7 @@ impl<T, C> RequestContext<T, C> {
     }
 
     /// The token subject (`sub` claim).
-    pub fn sub(&self) -> &str
-    where
-        C: Claims,
-    {
+    pub fn sub(&self) -> &str {
         self.claims.sub()
     }
 
@@ -121,10 +118,7 @@ impl<T, C> RequestContext<T, C> {
     ///
     /// Long-lived stream handlers can compare this with the current time to
     /// decide when to end the stream.
-    pub fn exp_unix(&self) -> u64
-    where
-        C: Claims,
-    {
+    pub fn exp_unix(&self) -> u64 {
         self.claims.exp_unix()
     }
 
@@ -132,10 +126,7 @@ impl<T, C> RequestContext<T, C> {
     ///
     /// The validation layer rejects expired tokens when a request starts, but a
     /// stream can outlive its token, so stream handlers should re-check this.
-    pub fn is_expired(&self) -> bool
-    where
-        C: Claims,
-    {
+    pub fn is_expired(&self) -> bool {
         self.claims.is_expired()
     }
 }
