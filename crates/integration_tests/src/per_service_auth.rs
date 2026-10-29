@@ -12,8 +12,9 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use rust_auth_lib::{ForwardedToken, test_fixtures};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -39,9 +40,6 @@ use crate::services::example::{
 const TEST_KID: &str = "per-service-test-kid";
 
 fn make_jwt(roles: &[&str]) -> String {
-    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()

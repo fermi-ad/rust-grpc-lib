@@ -34,9 +34,13 @@
 //! - `KeycloakClientCredentialsProvider` — requires a live Keycloak token
 //!   endpoint; use `rust-auth-lib` directly if needed.
 
+use tonic::Request;
+
 pub mod context;
 pub mod interceptor;
 pub mod layer;
+#[cfg(test)]
+mod tests;
 
 // Traits
 pub use rust_auth_lib::Claims;
@@ -67,10 +71,6 @@ pub use layer::{
     JwtValidationLayer, JwtValidationService, validator_into_interceptor, validator_into_layer,
     wrap_service,
 };
-use tonic::Request;
-
-#[cfg(test)]
-mod tests;
 
 /// Construct from the metadata of an incoming tonic request.
 pub fn extract_token<T>(request: &Request<T>) -> Result<ForwardedToken, TokenError> {

@@ -12,6 +12,26 @@ use tonic::{
     transport::server::TcpConnectInfo,
 };
 
+/// Claims type that is not the one the tests ask for.
+#[derive(Clone)]
+struct OtherClaims;
+
+/// Extension used to prove that arbitrary extensions pass through.
+#[derive(Clone, Debug, PartialEq)]
+struct Marker(u8);
+
+/// Decoder that never yields a message, enough to build an empty `Streaming`.
+struct NoopDecoder;
+
+impl Decoder for NoopDecoder {
+    type Item = u32;
+    type Error = Status;
+
+    fn decode(&mut self, _src: &mut DecodeBuf<'_>) -> Result<Option<u32>, Status> {
+        Ok(None)
+    }
+}
+
 fn claims(roles: &[&str]) -> KeycloakClaims {
     roles
         .iter()
@@ -27,9 +47,6 @@ fn request_with_claims<T>(message: T, roles: &[&str]) -> Request<T> {
     req
 }
 
-// -----------------------------------------------------------------------
-// Claims present
-// -----------------------------------------------------------------------
 #[test]
 fn claims_present_builds_context() {
     let req = request_with_claims("hello".to_string(), &["operator"]);
@@ -44,9 +61,6 @@ fn claims_present_builds_context() {
     assert!(ctx.rpc_method.is_none());
 }
 
-// -----------------------------------------------------------------------
-// Claims missing
-// -----------------------------------------------------------------------
 #[test]
 fn missing_claims_returns_generic_internal_error() {
     let req = Request::new("hello".to_string());
@@ -64,29 +78,13 @@ fn missing_claims_returns_generic_internal_error() {
 
 #[test]
 fn claims_of_a_different_type_count_as_missing() {
-    #[derive(Clone)]
-    struct OtherClaims;
-
     let mut req = Request::new(());
     req.extensions_mut().insert(OtherClaims);
 
     let err = RequestContext::<(), KeycloakClaims>::try_from_request(req)
         .expect_err("only claims of type C are accepted");
+
     assert_eq!(err.code(), Code::Internal);
-}
-
-// -----------------------------------------------------------------------
-// Streaming message type
-// -----------------------------------------------------------------------
-struct NoopDecoder;
-
-impl Decoder for NoopDecoder {
-    type Item = u32;
-    type Error = Status;
-
-    fn decode(&mut self, _src: &mut DecodeBuf<'_>) -> Result<Option<u32>, Status> {
-        Ok(None)
-    }
 }
 
 #[test]
@@ -102,14 +100,8 @@ fn streaming_message_type_is_supported() {
     let _stream: Streaming<u32> = ctx.message;
 }
 
-// -----------------------------------------------------------------------
-// Metadata and extension passthrough
-// -----------------------------------------------------------------------
 #[test]
 fn metadata_and_extensions_pass_through() {
-    #[derive(Clone, Debug, PartialEq)]
-    struct Marker(u8);
-
     let mut req = request_with_claims((), &[]);
     req.metadata_mut()
         .insert("x-request-id", "abc-123".parse().unwrap());
@@ -123,13 +115,9 @@ fn metadata_and_extensions_pass_through() {
     assert!(ctx.extensions.get::<KeycloakClaims>().is_some());
 }
 
-// -----------------------------------------------------------------------
-// Remote address capture
-// -----------------------------------------------------------------------
 #[test]
 fn remote_addr_is_captured_from_connect_info() {
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3)), 4242);
-
     let mut req = request_with_claims((), &[]);
     req.extensions_mut().insert(TcpConnectInfo {
         local_addr: None,
@@ -141,9 +129,6 @@ fn remote_addr_is_captured_from_connect_info() {
     assert_eq!(ctx.remote_addr, Some(addr));
 }
 
-// -----------------------------------------------------------------------
-// RpcMethod pickup
-// -----------------------------------------------------------------------
 #[test]
 fn rpc_method_extension_is_surfaced() {
     let method = RpcMethod {
@@ -158,9 +143,6 @@ fn rpc_method_extension_is_surfaced() {
     assert_eq!(ctx.rpc_method, Some(method));
 }
 
-// -----------------------------------------------------------------------
-// Expiry accessors
-// -----------------------------------------------------------------------
 #[test]
 fn expiry_accessors_reflect_the_claims() {
     let live = RequestContext::<()>::try_from_request(request_with_claims((), &[])).unwrap();

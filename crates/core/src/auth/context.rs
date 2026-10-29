@@ -30,6 +30,7 @@
 //! expected claims type) is logged server-side with `tracing::error!` when the
 //! `tracing` feature is enabled, and is never sent to the remote client.
 
+use std::any::type_name;
 use std::net::SocketAddr;
 
 use rust_auth_lib::{Claims, Ephemeral, keycloak::KeycloakClaims};
@@ -37,22 +38,6 @@ use tonic::{Extensions, Request, Status, metadata::MetadataMap};
 
 #[cfg(test)]
 mod tests;
-
-/// The gRPC method an RPC was dispatched to, parsed from the request path
-/// `/<service>/<method>` (for example `/services.example.v1.ExampleDB/GetEndPointOne`).
-///
-/// tonic does not insert this on the server side, so it is populated by a
-/// library-owned layer that is not part of this release. Until that layer is
-/// installed, [`RequestContext::rpc_method`] is `None`. Anything that inserts
-/// an `RpcMethod` into the request extensions will be picked up by
-/// [`RequestContext::try_from_request`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RpcMethod {
-    /// Fully qualified service name, e.g. `services.example.v1.ExampleDB`.
-    pub service: String,
-    /// Method name, e.g. `GetEndPointOne`.
-    pub method: String,
-}
 
 /// Everything a handler needs to know about an authenticated request.
 ///
@@ -75,15 +60,12 @@ pub struct RequestContext<T, C = KeycloakClaims> {
     pub extensions: Extensions,
     /// The peer's socket address, when the transport reports one.
     pub remote_addr: Option<SocketAddr>,
-    /// The RPC being served, when an `RpcMethod` extension was inserted by an
-    /// outer layer; `None` otherwise.
+    /// The RPC being served, when an [`RpcMethod`] extension was inserted by
+    /// an outer layer; `None` otherwise.
     pub rpc_method: Option<RpcMethod>,
 }
 
-impl<T, C> RequestContext<T, C>
-where
-    C: Clone + Send + Sync + 'static,
-{
+impl<T, C> RequestContext<T, C> {
     /// Build a context from an incoming request.
     ///
     /// The remote address is read before the request is taken apart, because
@@ -95,7 +77,10 @@ where
     /// Returns [`Status::internal`] with the generic message
     /// `"authentication is not configured"` when no claims of type `C` are in
     /// the request extensions. See the [module docs](self).
-    pub fn try_from_request(request: Request<T>) -> Result<Self, Status> {
+    pub fn try_from_request(request: Request<T>) -> Result<Self, Status>
+    where
+        C: Clone + Send + Sync + 'static,
+    {
         let remote_addr = request.remote_addr();
         let (metadata, extensions, message) = request.into_parts();
 
@@ -104,7 +89,7 @@ where
             None => {
                 #[cfg(feature = "tracing")]
                 tracing::error!(
-                    claims_type = std::any::type_name::<C>(),
+                    claims_type = type_name::<C>(),
                     "request has no claims extension; the JWT validation layer or \
                      interceptor is not installed for this service"
                 );
@@ -123,14 +108,12 @@ where
             rpc_method,
         })
     }
-}
 
-impl<T, C> RequestContext<T, C>
-where
-    C: Claims,
-{
     /// The token subject (`sub` claim).
-    pub fn sub(&self) -> &str {
+    pub fn sub(&self) -> &str
+    where
+        C: Claims,
+    {
         self.claims.sub()
     }
 
@@ -138,7 +121,10 @@ where
     ///
     /// Long-lived stream handlers can compare this with the current time to
     /// decide when to end the stream.
-    pub fn exp_unix(&self) -> u64 {
+    pub fn exp_unix(&self) -> u64
+    where
+        C: Claims,
+    {
         self.claims.exp_unix()
     }
 
@@ -146,14 +132,36 @@ where
     ///
     /// The validation layer rejects expired tokens when a request starts, but a
     /// stream can outlive its token, so stream handlers should re-check this.
-    pub fn is_expired(&self) -> bool {
+    pub fn is_expired(&self) -> bool
+    where
+        C: Claims,
+    {
         Ephemeral::is_expired(&self.claims)
     }
 }
 
+// A second inherent `impl` is unavoidable here: role data only exists on
+// `KeycloakClaims`, and a method-level `where` clause cannot pin `C` to a
+// concrete type.
 impl<T> RequestContext<T, KeycloakClaims> {
     /// Whether the caller has the given realm role.
     pub fn has_role(&self, role: &str) -> bool {
         self.claims.has_role(role)
     }
+}
+
+/// The gRPC method an RPC was dispatched to, parsed from the request path
+/// `/<service>/<method>` (for example `/services.example.v1.ExampleDB/GetEndPointOne`).
+///
+/// tonic does not insert this on the server side, so it is populated by a
+/// library-owned layer that is not part of this release. Until that layer is
+/// installed, [`RequestContext::rpc_method`] is `None`. Anything that inserts
+/// an `RpcMethod` into the request extensions will be picked up by
+/// [`RequestContext::try_from_request`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RpcMethod {
+    /// Fully qualified service name, e.g. `services.example.v1.ExampleDB`.
+    pub service: String,
+    /// Method name, e.g. `GetEndPointOne`.
+    pub method: String,
 }

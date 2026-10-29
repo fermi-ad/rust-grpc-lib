@@ -174,17 +174,6 @@ impl<C, V> JwtValidationService<C, V> {
     }
 }
 
-// Manual impl: `#[derive(Clone)]` would needlessly require `C: Clone` and
-// `V: Clone`, but only the `Arc<V>` is cloned.
-impl<C, V> Clone for JwtValidationService<C, V> {
-    fn clone(&self) -> Self {
-        Self {
-            _claims: PhantomData,
-            validator: Arc::clone(&self.validator),
-        }
-    }
-}
-
 impl<C: Claims + Clone, V: TokenValidator + Send + Sync + 'static> Interceptor
     for JwtValidationService<C, V>
 {
@@ -213,5 +202,16 @@ impl<C: Claims + Clone, V: TokenValidator + Send + Sync + 'static> Interceptor
 
         req.extensions_mut().insert(claims);
         Ok(req)
+    }
+}
+
+// Manual impl: `#[derive(Clone)]` would needlessly require `C: Clone` and
+// `V: Clone`, but only the `Arc<V>` is cloned.
+impl<C, V> Clone for JwtValidationService<C, V> {
+    fn clone(&self) -> Self {
+        Self {
+            _claims: PhantomData,
+            validator: Arc::clone(&self.validator),
+        }
     }
 }
