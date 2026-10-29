@@ -202,7 +202,7 @@ tonic::transport::Server::builder()
     .await?;
 ```
 
-`wrap_service` needs no direct `tower` dependency and keeps `NamedService`, so `set_serving` keeps working. Equivalent: `DaqServer::with_interceptor(MyDaqService, validator_into_interceptor::<KeycloakClaims, _>(validator))`.
+`wrap_service` needs no direct `tower` dependency and keeps `NamedService`, so `set_serving` keeps working. Equivalent: `DaqServer::with_interceptor(MyDaqService, JwtValidationService::<KeycloakClaims, _>::new(validator))`.
 
 ### Edge/hardware service
 

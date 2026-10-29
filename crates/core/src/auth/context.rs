@@ -33,7 +33,7 @@
 use std::any::type_name;
 use std::net::SocketAddr;
 
-use rust_auth_lib::{Claims, Ephemeral, keycloak::KeycloakClaims};
+use rust_auth_lib::{Claims, keycloak::KeycloakClaims};
 use tonic::{Extensions, Request, Status, metadata::MetadataMap};
 
 #[cfg(test)]
@@ -136,7 +136,7 @@ impl<T, C> RequestContext<T, C> {
     where
         C: Claims,
     {
-        Ephemeral::is_expired(&self.claims)
+        self.claims.is_expired()
     }
 }
 

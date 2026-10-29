@@ -46,34 +46,29 @@ fn name_of<S: NamedService>(_: &S) -> &'static str {
 }
 
 // -----------------------------------------------------------------------
-// Public constructors: new, validator_into_interceptor, clone
+// Public constructor: new, clone
 // -----------------------------------------------------------------------
 #[test]
-fn new_and_validator_into_interceptor_build_working_interceptors() {
+fn new_builds_a_working_interceptor() {
     const KID: &str = "ctor-kid";
-    let validator = make_validator(KID);
+    let mut svc = JwtValidationService::<KeycloakClaims, _>::new(make_validator(KID));
 
-    let mut via_new = JwtValidationService::<KeycloakClaims, _>::new(Arc::clone(&validator));
-    let mut via_fn = validator_into_interceptor::<KeycloakClaims, _>(validator);
+    let enriched = svc
+        .call(bearer_request(KID))
+        .expect("valid token must pass");
+    assert!(enriched.extensions().get::<KeycloakClaims>().is_some());
 
-    for svc in [&mut via_new, &mut via_fn] {
-        let enriched = svc
-            .call(bearer_request(KID))
-            .expect("valid token must pass");
-        assert!(enriched.extensions().get::<KeycloakClaims>().is_some());
-
-        let err = svc
-            .call(Request::new(()))
-            .expect_err("missing header must fail");
-        assert_eq!(err.code(), Code::Unauthenticated);
-    }
+    let err = svc
+        .call(Request::new(()))
+        .expect_err("missing header must fail");
+    assert_eq!(err.code(), Code::Unauthenticated);
 }
 
 #[test]
 fn interceptor_is_clone_without_clonable_validator_or_claims() {
     // `KeyValidator` is not required to be `Clone`; only the `Arc` is cloned.
     const KID: &str = "clone-kid";
-    let svc = validator_into_interceptor::<KeycloakClaims, _>(make_validator(KID));
+    let svc = JwtValidationService::<KeycloakClaims, _>::new(make_validator(KID));
     let mut cloned = svc.clone();
 
     cloned

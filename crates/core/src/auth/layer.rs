@@ -1,6 +1,6 @@
 //! Server-side JWT validation for tonic gRPC services.
 //!
-//! Defines two types and three constructors:
+//! Defines two types and two free constructors:
 //!
 //! - [`JwtValidationService`] — the [`tonic::service::Interceptor`] that
 //!   validates `Authorization: Bearer` headers on every incoming request.
@@ -9,11 +9,11 @@
 //! - [`validator_into_layer`] — constructs a [`JwtValidationLayer`] from any
 //!   [`TokenValidator`]. Applied with `Server::layer`, it guards **every**
 //!   service on the server, including health checks and reflection.
-//! - [`validator_into_interceptor`] (or [`JwtValidationService::new`]) —
-//!   constructs the bare interceptor, for use with a generated server's
-//!   `with_interceptor(inner, interceptor)`.
 //! - [`wrap_service`] — wraps a single generated server in the interceptor
 //!   without needing a direct `tower` dependency.
+//!
+//! [`JwtValidationService::new`] builds the bare interceptor, for use with a
+//! generated server's `with_interceptor(inner, interceptor)`.
 //!
 //! # Global layer or per-service auth
 //!
@@ -95,23 +95,7 @@ pub type JwtValidationLayer<C, V> = InterceptorLayer<JwtValidationService<C, V>>
 pub fn validator_into_layer<C: Claims, V: TokenValidator>(
     validator: Arc<V>,
 ) -> JwtValidationLayer<C, V> {
-    InterceptorLayer::new(validator_into_interceptor(validator))
-}
-
-/// Construct the bare [`JwtValidationService`] interceptor.
-///
-/// Pass it to a generated server's `with_interceptor`:
-///
-/// ```rust,ignore
-/// let interceptor = validator_into_interceptor::<KeycloakClaims, _>(validator);
-/// let svc = MyServiceServer::with_interceptor(MyService, interceptor);
-/// ```
-///
-/// Tonic's `with_interceptor` takes `impl Interceptor`, and
-/// `JwtValidationService` implements it for any [`Claims`] type that is
-/// `Clone`.
-pub fn validator_into_interceptor<C, V>(validator: Arc<V>) -> JwtValidationService<C, V> {
-    JwtValidationService::new(validator)
+    InterceptorLayer::new(JwtValidationService::new(validator))
 }
 
 /// Wrap a single tonic service so every request to it must carry a valid
@@ -133,16 +117,15 @@ pub fn wrap_service<C, V, S>(
     service: S,
     validator: Arc<V>,
 ) -> InterceptedService<S, JwtValidationService<C, V>> {
-    InterceptedService::new(service, validator_into_interceptor(validator))
+    InterceptedService::new(service, JwtValidationService::new(validator))
 }
 
 /// The server-side interceptor that validates `Authorization: Bearer <token>` on
 /// every incoming gRPC request.
 ///
 /// `JwtValidationService` is the inner interceptor type used by
-/// [`JwtValidationLayer`]. Construct it with [`JwtValidationService::new`] or
-/// [`validator_into_interceptor`], or let [`validator_into_layer`] and
-/// [`wrap_service`] do it for you.
+/// [`JwtValidationLayer`]. Construct it with [`JwtValidationService::new`], or
+/// let [`validator_into_layer`] and [`wrap_service`] do it for you.
 ///
 /// On success, the validated [`KeycloakClaims`](crate::auth::KeycloakClaims) are inserted into the request's
 /// extensions so that handler methods can retrieve them through
@@ -166,6 +149,13 @@ pub struct JwtValidationService<C, V> {
 impl<C, V> JwtValidationService<C, V> {
     /// Create an interceptor that validates tokens with `validator` and
     /// inserts claims of type `C` into the request extensions.
+    ///
+    /// Pass it to a generated server's `with_interceptor`:
+    ///
+    /// ```rust,ignore
+    /// let interceptor = JwtValidationService::<KeycloakClaims, _>::new(validator);
+    /// let svc = MyServiceServer::with_interceptor(MyService, interceptor);
+    /// ```
     pub fn new(validator: Arc<V>) -> Self {
         Self {
             _claims: PhantomData,

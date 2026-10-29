@@ -8,7 +8,7 @@
 //! Both public routes are covered:
 //!
 //! - [`wrap_service`] (no direct `tower` dependency needed), and
-//! - `ExampleDbServer::with_interceptor(inner, validator_into_interceptor(..))`.
+//! - `ExampleDbServer::with_interceptor(inner, JwtValidationService::new(..))`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -27,8 +27,8 @@ use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, health_check_response::ServingStatus};
 
 use rust_grpc_lib::auth::{
-    ClientJwtInterceptor, KeyValidator, KeyValidatorConfig, KeycloakClaims, RequestContext,
-    validator_into_interceptor, wrap_service,
+    ClientJwtInterceptor, JwtValidationService, KeyValidator, KeyValidatorConfig, KeycloakClaims,
+    RequestContext, wrap_service,
 };
 
 use crate::services::example::{
@@ -123,7 +123,7 @@ async fn start(wiring: Wiring) -> Running {
         )),
         Wiring::WithInterceptor => router.add_service(ExampleDbServer::with_interceptor(
             Stub,
-            validator_into_interceptor::<KeycloakClaims, _>(validator),
+            JwtValidationService::<KeycloakClaims, _>::new(validator),
         )),
     };
 

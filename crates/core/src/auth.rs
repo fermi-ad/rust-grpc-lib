@@ -8,8 +8,8 @@
 //! - [`interceptor`] — [`ClientJwtInterceptor`], the outbound client interceptor
 //!   that attaches `Bearer` tokens to every outgoing request.
 //! - [`layer`] — [`JwtValidationLayer`] / [`JwtValidationService`], the
-//!   [`validator_into_layer`], [`validator_into_interceptor`] and
-//!   [`wrap_service`] constructors for server-side JWT validation.
+//!   [`validator_into_layer`] and [`wrap_service`] constructors for
+//!   server-side JWT validation.
 //! - [`context`] — [`RequestContext`], the per-request bundle of message,
 //!   claims, metadata and extensions that handlers should use to read claims.
 //!
@@ -67,10 +67,7 @@ pub use rust_auth_lib::keycloak::KeycloakClaims;
 // gRPC-specific types from submodules
 pub use context::{RequestContext, RpcMethod};
 pub use interceptor::ClientJwtInterceptor;
-pub use layer::{
-    JwtValidationLayer, JwtValidationService, validator_into_interceptor, validator_into_layer,
-    wrap_service,
-};
+pub use layer::{JwtValidationLayer, JwtValidationService, validator_into_layer, wrap_service};
 
 /// Construct from the metadata of an incoming tonic request.
 pub fn extract_token<T>(request: &Request<T>) -> Result<ForwardedToken, TokenError> {
