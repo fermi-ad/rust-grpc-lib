@@ -1,16 +1,56 @@
-//! Tests for the claim-injection helpers in [`super`].
+//! Tests for the claim helpers and span capture in [`super`].
 
 use super::*;
 
-use crate::auth::{Claims, KeycloakClaims};
+use crate::auth::Claims;
 
 fn claims(roles: &[&str]) -> KeycloakClaims {
-    roles
-        .iter()
-        .fold(KeycloakClaimsBuilder::new("test-sub"), |b, r| {
-            b.realm_role(*r)
-        })
-        .build()
+    claims_with_roles("test-sub", roles)
+}
+
+#[test]
+fn claims_with_roles_sets_the_subject_and_every_role() {
+    let claims = claims_with_roles("alice", &["operator", "admin"]);
+
+    assert_eq!(claims.sub(), "alice");
+    assert!(claims.has_role("operator"));
+    assert!(claims.has_role("admin"));
+    assert!(!claims.has_role("viewer"));
+}
+
+#[test]
+fn claims_with_no_roles_has_none() {
+    assert!(!claims_with_roles("alice", &[]).has_role("operator"));
+}
+
+#[test]
+fn capture_spans_records_initial_and_later_values() {
+    let (capture, _guard) = capture_spans();
+
+    let span = tracing::info_span!("work", kind = "initial", later = tracing::field::Empty);
+    assert_eq!(capture.field("work", "kind").as_deref(), Some("initial"));
+    assert_eq!(capture.field("work", "later"), None);
+
+    span.record("later", "filled in");
+    let records = capture.spans("work");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].name(), "work");
+    assert_eq!(records[0].field("later"), Some("filled in"));
+    assert!(records[0].has_field("kind"));
+    assert!(!records[0].has_field("missing"));
+}
+
+#[test]
+fn capture_spans_keeps_spans_after_they_close() {
+    let (capture, _guard) = capture_spans();
+
+    drop(tracing::info_span!("short", n = 1));
+    drop(tracing::info_span!("short", n = 2));
+
+    let records = capture.spans("short");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].field("n"), Some("1"));
+    assert_eq!(records[1].field("n"), Some("2"));
 }
 
 #[test]
