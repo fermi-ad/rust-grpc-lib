@@ -21,7 +21,7 @@ use tonic::{Code, Request, Response, Status};
 
 use rust_grpc_lib::auth::KeycloakClaims;
 use rust_grpc_lib::keycloak_authenticated_service;
-use rust_grpc_lib::testing::KeycloakClaimsBuilder;
+use rust_grpc_lib::testing::claims_with_roles;
 
 // ---------------------------------------------------------------------------
 // Minimal tonic-like service trait and server struct
@@ -64,15 +64,10 @@ impl EchoService for MultiRoleServer {
 
 // ---------------------------------------------------------------------------
 // Helper: build a KeycloakClaims value with the given realm roles, using the
-// `test-util` claims builder.
+// `test-util` helper.
 // ---------------------------------------------------------------------------
 fn make_claims(realm_roles: &[&str]) -> KeycloakClaims {
-    realm_roles
-        .iter()
-        .fold(KeycloakClaimsBuilder::new("test-user"), |builder, role| {
-            builder.realm_role(*role)
-        })
-        .build()
+    claims_with_roles("test-user", realm_roles)
 }
 
 // ---------------------------------------------------------------------------

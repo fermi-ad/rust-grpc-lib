@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.9.0] — 2026-10-30
+
+### Added
+
+- **`trace` feature** (off by default; implies `auth`) enabling the new `rust_grpc_lib::trace` module and adding `tower`, `tower-http` (`trace` only) and `pin-project-lite` as optional dependencies. Client-only consumers do not pay for them.
+- **`trace::GrpcTraceLayer`**, a tower layer built on tower-http's `TraceLayer::new_for_grpc()`. It opens one `rpc` span per request (target `rust_grpc_lib::trace`) and holds it open until the response stream ends, so unary and streaming RPCs are both covered. Fields: `rpc.system` (`"grpc"`), `rpc.service`, `rpc.method` (both `unknown` for an unparseable path), `grpc.status` (code name, read from the response headers or the stream trailers), `latency_ms`, `stream_ms` and `user`. Transport and body errors are logged as a `warn` event inside the span.
+  - Install it with `Server::layer` before any other layer so it is outermost. It then also sees requests that the auth layer or interceptor rejects (recorded as `Unauthenticated`), and health requests.
+  - A drop guard records `grpc.status = Cancelled` when the response future is dropped before it completes, which is what tonic's `Server::timeout` does at the deadline (a client cancellation looks the same). A client that cancels after the response headers were sent leaves `grpc.status` unset.
+- **`RpcMethod` extension.** The layer inserts an `RpcMethod` parsed from the request path, which tonic does not do on the server. `RequestContext::rpc_method` is now populated when the layer is installed. New `RpcMethod::from_path(&str) -> Option<RpcMethod>`.
+- **`RpcSpan` extension** (re-exported from `rust_grpc_lib::auth`), holding the RPC's span. `RequestContext::try_from_request` records the caller's `sub` onto it as `user`; see the `RpcSpan` docs for why it does not use `Span::current()`.
+- **`testing::capture_spans`** (`test-util`), returning a `SpanCapture` and a guard. It records every `tracing` span and the values recorded onto it, for tests that assert on span fields. The subscriber is thread-local, so use it on the default current-thread test runtime. `SpanRecord` exposes `name()`, `field()` and `has_field()`.
+- **`testing::claims_with_roles(sub, &[roles])`** (`test-util`), shorthand for building `KeycloakClaims` with a subject and realm roles.
+
+### Changed
+
+- `test-util` now also enables an optional `tracing-subscriber` dependency (`registry` feature only) for `capture_spans`.
+
+### Compatibility
+
+Additive. Nothing changes for a consumer that does not enable `trace`, apart from the one extra test-only dependency under `test-util`. `RequestContext::rpc_method` stays `None` unless `GrpcTraceLayer` (or something else that inserts an `RpcMethod`) is installed.
+
+---
+
 ## [7.8.0] — 2026-10-30
 
 ### Added
