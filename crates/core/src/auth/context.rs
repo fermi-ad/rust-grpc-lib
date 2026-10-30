@@ -27,8 +27,8 @@
 //! validation layer or interceptor. That is a server-side misconfiguration,
 //! not a client error, so [`RequestContext::try_from_request`] fails closed
 //! with [`Status::internal`] and a generic message. The detail (including the
-//! expected claims type) is logged server-side with `tracing::error!` when the
-//! `tracing` feature is enabled, and is never sent to the remote client.
+//! expected claims type) is logged server-side with `tracing::error!`, and is
+//! never sent to the remote client.
 
 use std::any::type_name;
 use std::net::SocketAddr;
@@ -87,7 +87,6 @@ impl<T, C: Claims> RequestContext<T, C> {
         let claims = match extensions.get::<C>() {
             Some(claims) => claims.clone(),
             None => {
-                #[cfg(feature = "tracing")]
                 tracing::error!(
                     claims_type = type_name::<C>(),
                     "request has no claims extension; the JWT validation layer or \

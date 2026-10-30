@@ -10,69 +10,55 @@
 //!   `unauthenticated` feature on `rust-grpc-lib`.
 //! - [`keycloak_authenticated_service`] — attribute macro applied to an `impl Trait for Type`
 //!   block that injects Keycloak role-checking guards into methods annotated
-//!   with `#[roles(...)]`.
+//!   with `#[roles(...)]` and lets handlers take a `RequestContext<T>` instead
+//!   of a `tonic::Request<T>`.
 //! - [`roles`] — marker attribute consumed by [`keycloak_authenticated_service`]. A pass-through
 //!   no-op when used without `#[keycloak_authenticated_service]` on the enclosing `impl` block.
 //!
-//! Internal helpers (`RolesSpec`, `RolesArgs`, `extract_roles_attr`,
-//! `first_param_ident`, `build_guard`) are private to this crate.
-
-use std::{iter, mem::take};
+//! # Layout
+//!
+//! A proc-macro crate must define its macros at the crate root, so this file
+//! holds only the documented entry points. Each one delegates to a module that
+//! works on `proc_macro2` token streams and returns a `syn::Result`:
+//!
+//! | Module | Expands |
+//! |---|---|
+//! | `client` | `GrpcClient` and `GrpcNoAuthClient` |
+//! | `service` | `keycloak_authenticated_service`, split into one submodule per concern (arguments, environment, `#[async_trait]` order check, request-parameter rewrite, `#[roles]` parsing, guard emission) |
+//!
+//! # Dependencies of the consumer
+//!
+//! The code emitted by [`keycloak_authenticated_service`] names `::tonic` and
+//! `::tracing`, which resolve to whatever versions the consuming crate depends
+//! on. The crate does not pin or re-export them. Three couplings cannot be
+//! avoided:
+//!
+//! - **Crate names.** By policy every consumer depends on `rust-grpc-lib`,
+//!   `tonic` and `tracing` under their normal names (no `package = ".."`
+//!   renames). The emitted code is rooted at `::rust_grpc_lib`, `::tonic` and
+//!   `::tracing`, and no crate-name resolution is attempted.
+//! - **`tonic` compatibility.** A `RequestContext<T>` parameter is rewritten to
+//!   `::tonic::Request<T>` and handed to `RequestContext::try_from_request`,
+//!   and the guard returns `::tonic::Status`. The consumer's `tonic` must
+//!   therefore be semver-compatible with the one `rust-grpc-lib` is built
+//!   against, or the types will not unify.
+//! - **`tracing` presence.** The guard always emits events (denials and
+//!   missing claims), so the expansion calls `::tracing` and the consumer
+//!   needs `tracing` as a direct dependency (any 0.1 works).
 
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
 
-use quote::quote;
-use syn::{
-    Attribute, DeriveInput, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, Lit, Meta, MetaList, Pat,
-    Path, Token,
-    parse::{Parse, ParseStream},
-    parse_macro_input,
-};
+mod client;
+mod service;
 
 #[proc_macro_derive(GrpcClient)]
 pub fn grpc_client_derive(input: TokenStream) -> TokenStream {
-    let parsed = parse_macro_input!(input as DeriveInput);
-    let name = &parsed.ident;
-
-    // Use `::rust_grpc_lib` so the impl resolves against the `core` crate when this
-    // derive is expanded, not against any re-export in a consuming crate.
-    let as_grpc_client = quote! {
-        impl #name<::tonic::transport::Channel>
-        {
-            pub fn from_endpoint_with_provider<P: ::rust_grpc_lib::auth::TokenProvider>(
-                endpoint: &str,
-                provider: P,
-            ) -> Result<#name<::tonic::service::interceptor::InterceptedService<::tonic::transport::Channel, ::rust_grpc_lib::auth::ClientJwtInterceptor<P>>>, ::tonic::transport::Error>
-            {
-                let channel = ::rust_grpc_lib::pool::get_channel(endpoint)?;
-                Ok(#name::new(::tonic::service::interceptor::InterceptedService::new(channel, ::rust_grpc_lib::auth::ClientJwtInterceptor::new(provider))))
-            }
-        }
-    };
-    TokenStream::from(as_grpc_client)
+    into_token_stream(client::expand_grpc_client(input.into()))
 }
 
 #[proc_macro_derive(GrpcNoAuthClient)]
 pub fn grpc_no_auth_client_derive(input: TokenStream) -> TokenStream {
-    let parsed = parse_macro_input!(input as DeriveInput);
-    let name = &parsed.ident;
-
-    // Use `::rust_grpc_lib` so the impl resolves against the `core` crate when this
-    // derive is expanded, not against any re-export in a consuming crate.
-    let as_grpc_client = quote! {
-        impl #name<::tonic::transport::Channel>
-        {
-            pub fn from_endpoint(
-                endpoint: &str,
-            ) -> Result<Self, ::tonic::transport::Error>
-            {
-                let channel = ::rust_grpc_lib::pool::get_channel(endpoint)?;
-                Ok(#name::new(channel))
-            }
-        }
-    };
-    TokenStream::from(as_grpc_client)
+    into_token_stream(client::expand_grpc_no_auth_client(input.into()))
 }
 
 /// Marker attribute consumed by [`keycloak_authenticated_service`].
@@ -101,32 +87,75 @@ pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
-/// Attribute macro applied to an `impl Trait for Type` block that injects
-/// Keycloak role-checking guards into methods annotated with `#[roles(...)]`.
+/// Attribute macro applied to an `impl Trait for Type` block. It injects
+/// Keycloak role-checking guards into methods annotated with `#[roles(...)]`
+/// and rewrites `RequestContext<T>` parameters.
+///
+/// # Placement
+///
+/// The attribute must be written **above** `#[async_trait]`, because it has to
+/// see the `async fn` signatures before `async_trait` rewrites them. The wrong
+/// order is detected and reported with a dedicated compile error.
+///
+/// ```rust,ignore
+/// #[keycloak_authenticated_service]
+/// #[tonic::async_trait]
+/// impl MyService for MyServer { /* ... */ }
+/// ```
 ///
 /// # Role check variants
 ///
 /// - `#[roles(any("r1", "r2"))]` — at least one of the listed roles must be
 ///   present in the JWT claims.
 /// - `#[roles(all("r1", "r2"))]` — every listed role must be present.
-/// - No `#[roles(...)]` attribute — the method is left untouched (a valid JWT
-///   is still required by the `JwtValidationLayer`, but no role check is
+/// - No `#[roles(...)]` attribute — the method gets no role check (a valid JWT
+///   is still required by the JWT validation layer, but no role check is
 ///   injected by this macro).
+///
+/// # Handler parameter forms
+///
+/// The first non-`self` parameter of each method may be either of:
+///
+/// - `tonic::Request<T>` — the method is emitted unchanged apart from the
+///   guard, and reads claims from the request extensions.
+/// - `RequestContext<T>` (any path whose last segment is `RequestContext`) —
+///   the emitted signature takes a `tonic::Request<T>` under a hygienic name
+///   and the body starts with
+///   `let <name> = RequestContext::try_from_request(<request>)?;`. The role
+///   guard then reuses `<name>.claims`, so claims are looked up only once.
+///
+/// Both forms can be mixed in one `impl` block.
+///
+/// # Arguments
+///
+/// `#[keycloak_authenticated_service(claims = SomeClaims)]` selects the claims
+/// type that `Request<T>` methods read from the extensions. It defaults to
+/// `rust_grpc_lib::auth::KeycloakClaims`. `SomeClaims` must implement
+/// `Claims` and provide `has_role(&self, &str) -> bool`. Methods taking
+/// `RequestContext<T, C>` use the `C` written in the signature.
+///
+/// # Denied calls
+///
+/// A denied call returns `Status::permission_denied("required role not
+/// present")` and logs a `tracing::warn!` event with target
+/// `rust_grpc_lib::authz` and the message `authorization denied`. Its fields
+/// are `user` (the `sub` claim), `rpc.service` (the trait name), `rpc.method`
+/// (the Rust method name), `required_roles`, `role_mode` (`any` or `all`) and,
+/// when the transport reports it, `remote_addr`. The roles the caller actually
+/// holds, the token and the other claims are never logged.
 ///
 /// # Generated code shape
 ///
 /// ```rust,ignore
-/// async fn set_data(&self, request: Request<SetDataRequest>)
+/// async fn set_data(&self, __request: ::tonic::Request<SetDataRequest>)
 ///     -> Result<Response<SetDataResponse>, Status>
 /// {
+///     let ctx: RequestContext<SetDataRequest> =
+///         RequestContext::try_from_request(__request)?;
 ///     {
-///         let __claims = request
-///             .extensions()
-///             .get::<::rust_grpc_lib::auth::KeycloakClaims>()
-///             .ok_or_else(|| ::tonic::Status::internal(
-///                 "JWT claims not populated; ensure JwtValidationLayer is installed",
-///             ))?;
+///         let __claims = &ctx.claims;
 ///         if !["operator", "admin"].iter().any(|r| __claims.has_role(r)) {
+///             // tracing::warn!(target: "rust_grpc_lib::authz", ...);
 ///             return Err(::tonic::Status::permission_denied("required role not present"));
 ///         }
 ///     }
@@ -134,165 +163,12 @@ pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// }
 /// ```
 #[proc_macro_attribute]
-pub fn keycloak_authenticated_service(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut impl_block = parse_macro_input!(item as ItemImpl);
-
-    for impl_item in &mut impl_block.items {
-        let ImplItem::Fn(method) = impl_item else {
-            continue;
-        };
-
-        // Find and remove the #[roles(...)] attribute, capturing its content.
-        let roles_attr = match extract_roles_attr(&mut method.attrs) {
-            Ok(roles_attr) => roles_attr,
-            Err(e) => return e,
-        };
-
-        let Some(roles_spec) = roles_attr else {
-            // No roles attribute — leave method untouched.
-            continue;
-        };
-
-        // Determine the name of the first non-self parameter so we can call
-        // `.extensions()` on it.
-        let request_ident = first_param_ident(method);
-
-        // Build the guard block.
-        let guard = build_guard(request_ident, &roles_spec);
-
-        // Prepend the guard to the existing method body.
-        let original_stmts = take(&mut method.block.stmts);
-        match syn::parse2(quote! { #guard }) {
-            Ok(guard_stmt) => {
-                method.block.stmts = iter::once(guard_stmt).chain(original_stmts).collect()
-            }
-            Err(err) => return TokenStream::from(err.to_compile_error()),
-        }
-    }
-
-    TokenStream::from(quote! { #impl_block })
+pub fn keycloak_authenticated_service(attr: TokenStream, item: TokenStream) -> TokenStream {
+    into_token_stream(service::expand(attr.into(), item.into()))
 }
 
-// Internal helpers
-
-/// Describes the parsed content of a `#[roles(...)]` attribute.
-enum RolesSpec {
-    Any(Vec<String>),
-    All(Vec<String>),
-}
-
-/// Parses `any("r1", "r2")` or `all("r1", "r2")` from a [`MetaList`] token
-/// stream.
-struct RolesArgs {
-    spec: RolesSpec,
-}
-
-impl Parse for RolesArgs {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        // Expect an identifier: `any` or `all`.
-        let variant: syn::Ident = input.parse()?;
-        let variant_str = variant.to_string();
-
-        // Expect parenthesised list of string literals.
-        let content;
-        syn::parenthesized!(content in input);
-
-        let mut roles = Vec::new();
-        loop {
-            if content.is_empty() {
-                break;
-            }
-            let Lit::Str(s) = content.parse()? else {
-                return Err(syn::Error::new_spanned(
-                    &variant,
-                    "roles must be string literals",
-                ));
-            };
-            roles.push(s.value());
-            if content.is_empty() {
-                break;
-            }
-            let _comma: Token![,] = content.parse()?;
-        }
-
-        let spec = match variant_str.as_str() {
-            "any" => RolesSpec::Any(roles),
-            "all" => RolesSpec::All(roles),
-            other => {
-                return Err(syn::Error::new_spanned(
-                    &variant,
-                    format!("expected `any` or `all`, found `{other}`"),
-                ));
-            }
-        };
-
-        Ok(RolesArgs { spec })
-    }
-}
-
-/// Returns `true` if the [`Path`] is a single-segment path equal to `"roles"`.
-fn path_is_roles(path: &Path) -> bool {
-    path.get_ident().map(|i| i == "roles").unwrap_or(false)
-}
-
-/// Finds the first `#[roles(...)]` attribute in `attrs`, removes it, and
-/// returns the parsed [`RolesSpec`]. Returns `None` if no such attribute
-/// exists.
-fn extract_roles_attr(attrs: &mut Vec<Attribute>) -> Result<Option<RolesSpec>, TokenStream> {
-    let Some(tokens) = attrs
-        .iter()
-        .position(|a| matches!(&a.meta, Meta::List(ml) if path_is_roles(&ml.path)))
-        .and_then(|pos| {
-            let attr = attrs.remove(pos);
-            match attr.meta {
-                Meta::List(MetaList { tokens, .. }) => Some(tokens),
-                _ => None,
-            }
-        })
-    else {
-        return Ok(None);
-    };
-
-    syn::parse2::<RolesArgs>(tokens)
-        .map(|args| Some(args.spec))
-        .map_err(|e| TokenStream::from(e.to_compile_error()))
-}
-
-/// Returns the [`Ident`] of the first non-`self` parameter of `method`,
-/// or falls back to the identifier `request` if none can be found.
-fn first_param_ident(method: &ImplItemFn) -> Ident {
-    for input in &method.sig.inputs {
-        if let FnArg::Typed(pat_type) = input
-            && let Pat::Ident(pat_ident) = pat_type.pat.as_ref()
-        {
-            return pat_ident.ident.clone();
-        }
-    }
-    // Fallback — should not happen for well-formed gRPC service methods.
-    Ident::new("request", Span::call_site())
-}
-
-/// Builds the role-check guard block as a [`TokenStream2`].
-fn build_guard(request_ident: Ident, spec: &RolesSpec) -> TokenStream2 {
-    let (roles, iter_method) = match spec {
-        RolesSpec::Any(r) => (r, quote! { any }),
-        RolesSpec::All(r) => (r, quote! { all }),
-    };
-
-    // Build the array literal: ["r1", "r2", ...]
-    let role_literals: Vec<TokenStream2> = roles.iter().map(|r| quote! { #r }).collect();
-
-    quote! {
-        {
-            let __claims = #request_ident
-                .extensions()
-                .get::<::rust_grpc_lib::auth::KeycloakClaims>()
-                .ok_or_else(|| ::tonic::Status::internal(
-                    "JWT claims not populated; ensure JwtValidationLayer is installed"
-                ))?;
-            if ![#(#role_literals),*].iter().#iter_method(|r| __claims.has_role(r)) {
-                return Err(::tonic::Status::permission_denied("required role not present"));
-            }
-        }
-    }
+/// Turns an expansion result into the macro's output, rendering an error as a
+/// `compile_error!` at the span it carries.
+fn into_token_stream(result: syn::Result<proc_macro2::TokenStream>) -> TokenStream {
+    result.unwrap_or_else(syn::Error::into_compile_error).into()
 }
