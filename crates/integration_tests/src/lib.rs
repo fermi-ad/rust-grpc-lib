@@ -12,6 +12,10 @@
 //!   `with_interceptor`, with an unauthenticated health service alongside.
 //! - [`integration_round_trip`] — full client→server gRPC round-trip tests
 //!   using a real tonic server on a loopback port with `JwtValidationLayer`.
+//! - [`trace_layer`] — `GrpcTraceLayer` spans, extensions and timeout handling
+//!   on a live server, captured with a `tracing` layer.
+//! - [`support`] — token, validator and span-capture helpers shared by the
+//!   live-server tests.
 //!
 //! # Proto fixtures
 //!
@@ -37,6 +41,10 @@ mod keycloak_authenticated_service_macro;
 mod macro_request_context;
 #[cfg(test)]
 mod per_service_auth;
+#[cfg(test)]
+mod support;
+#[cfg(test)]
+mod trace_layer;
 
 #[cfg(test)]
 pub mod google {

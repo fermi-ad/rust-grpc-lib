@@ -4,13 +4,14 @@ use super::*;
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use rust_auth_lib::test_fixtures::KeycloakClaimsBuilder;
 use tonic::{
     Code, Streaming,
     body::Body,
     codec::{DecodeBuf, Decoder},
     transport::server::TcpConnectInfo,
 };
+
+use crate::testing::{KeycloakClaimsBuilder, capture_spans, claims_with_roles};
 
 /// Claims type that is not the one the tests ask for.
 #[derive(Clone)]
@@ -33,18 +34,11 @@ impl Decoder for NoopDecoder {
 }
 
 fn claims(roles: &[&str]) -> KeycloakClaims {
-    roles
-        .iter()
-        .fold(KeycloakClaimsBuilder::new("test-sub"), |b, r| {
-            b.realm_role(*r)
-        })
-        .build()
+    claims_with_roles("test-sub", roles)
 }
 
 fn request_with_claims<T>(message: T, roles: &[&str]) -> Request<T> {
-    let mut req = Request::new(message);
-    req.extensions_mut().insert(claims(roles));
-    req
+    crate::testing::request_with_claims(message, claims(roles))
 }
 
 #[test]
@@ -141,6 +135,18 @@ fn rpc_method_extension_is_surfaced() {
     let ctx = RequestContext::<()>::try_from_request(req).unwrap();
 
     assert_eq!(ctx.rpc_method, Some(method));
+}
+
+#[test]
+fn user_is_recorded_on_the_rpc_span() {
+    let (capture, _guard) = capture_spans();
+    let (span, _method) = RpcSpan::open("/pkg.Service/Method");
+    let mut req = request_with_claims((), &[]);
+    req.extensions_mut().insert(span);
+
+    RequestContext::<()>::try_from_request(req).unwrap();
+
+    assert_eq!(capture.field("rpc", "user").as_deref(), Some("test-sub"));
 }
 
 #[test]

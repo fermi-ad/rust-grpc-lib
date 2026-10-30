@@ -65,7 +65,7 @@ pub use rust_auth_lib::TokenError;
 pub use rust_auth_lib::keycloak::KeycloakClaims;
 
 // gRPC-specific types from submodules
-pub use context::{RequestContext, RpcMethod};
+pub use context::{RequestContext, RpcMethod, RpcSpan};
 pub use interceptor::ClientJwtInterceptor;
 pub use layer::{JwtValidationLayer, JwtValidationService, validator_into_layer, wrap_service};
 

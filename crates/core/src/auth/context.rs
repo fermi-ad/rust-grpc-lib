@@ -36,8 +36,11 @@ use std::net::SocketAddr;
 use rust_auth_lib::{Claims, keycloak::KeycloakClaims};
 use tonic::{Extensions, Request, Status, metadata::MetadataMap};
 
+mod rpc;
 #[cfg(test)]
 mod tests;
+
+pub use rpc::{RpcMethod, RpcSpan};
 
 /// Everything a handler needs to know about an authenticated request.
 ///
@@ -97,6 +100,10 @@ impl<T, C: Claims> RequestContext<T, C> {
         };
 
         let rpc_method = extensions.get::<RpcMethod>().cloned();
+
+        if let Some(rpc_span) = extensions.get::<RpcSpan>() {
+            rpc_span.record_user(claims.sub());
+        }
 
         Ok(Self {
             claims,
@@ -158,20 +165,4 @@ impl<T> RequestContext<T, KeycloakClaims> {
     pub fn has_role(&self, role: &str) -> bool {
         self.claims.has_role(role)
     }
-}
-
-/// The gRPC method an RPC was dispatched to, parsed from the request path
-/// `/<service>/<method>` (for example `/services.example.v1.ExampleDB/GetEndPointOne`).
-///
-/// tonic does not insert this on the server side, so it is populated by a
-/// library-owned layer that is not part of this release. Until that layer is
-/// installed, [`RequestContext::rpc_method`] is `None`. Anything that inserts
-/// an `RpcMethod` into the request extensions will be picked up by
-/// [`RequestContext::try_from_request`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RpcMethod {
-    /// Fully qualified service name, e.g. `services.example.v1.ExampleDB`.
-    pub service: String,
-    /// Method name, e.g. `GetEndPointOne`.
-    pub method: String,
 }

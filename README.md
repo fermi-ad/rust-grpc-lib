@@ -206,6 +206,25 @@ tonic::transport::Server::builder()
 
 `wrap_service` needs no direct `tower` dependency and keeps `NamedService`, so `set_serving` keeps working. Equivalent: `DaqServer::with_interceptor(MyDaqService, JwtValidationService::<KeycloakClaims, _>::new(validator))`.
 
+### Tracing every RPC (`trace` feature)
+
+The opt-in `trace` feature adds `rust_grpc_lib::trace::GrpcTraceLayer`, which opens one `rpc` span per request and keeps it open until the response stream ends, so unary and streaming RPCs are both covered. Install it with `Server::layer` **before any other layer** so that it is outermost and also sees requests that authentication rejects:
+
+```rust
+use rust_grpc_lib::trace::GrpcTraceLayer;
+
+tonic::transport::Server::builder()
+    .layer(GrpcTraceLayer::new())
+    .add_service(health)
+    .add_service(wrap_service::<KeycloakClaims, _, _>(DaqServer::new(MyDaqService), validator))
+    .serve("[::1]:50051".parse()?)
+    .await?;
+```
+
+Each span has the fields `rpc.system`, `rpc.service`, `rpc.method`, `grpc.status`, `latency_ms`, `stream_ms` and `user`, and the target `rust_grpc_lib::trace`. The layer also inserts the `RpcMethod` and `RpcSpan` request extensions, which is what fills `RequestContext::rpc_method` and the `user` field. See the [`trace`](crates/core/src/trace.rs) module docs for what each field means, how cancellation and timeouts are recorded, and why `user` is recorded onto the span directly.
+
+`Server::layer` wraps every service, so health probes get a span too; filter the `rust_grpc_lib::trace` target if they are noise. The layer does not authenticate anything. It adds `tower` and `tower-http` to the build, which is why it is behind a feature.
+
 ### Testing your service (`test-util`)
 
 Enable the `test-util` feature under `[dev-dependencies]` to get `rust_grpc_lib::testing`. It re-exports `rust-auth-lib`'s `KeycloakClaimsBuilder` and `test_fixtures`, so you do not need a direct dependency on it.
@@ -219,15 +238,27 @@ Unit-test a handler without a server or a JWT:
 
 ```rust
 use rust_grpc_lib::auth::RequestContext;
-use rust_grpc_lib::testing::{KeycloakClaimsBuilder, request_with_claims};
+use rust_grpc_lib::testing::{claims_with_roles, request_with_claims};
 
-let claims = KeycloakClaimsBuilder::new("alice").realm_role("operator").build();
+let claims = claims_with_roles("alice", &["operator"]);
 
 // A handler that takes `RequestContext<T>`:
 let ctx = RequestContext::for_test(claims.clone(), SetDataRequest::default());
 
 // A handler that still takes `Request<T>` (including `#[roles]`-guarded ones):
 let request = request_with_claims(SetDataRequest::default(), claims);
+```
+
+`claims_with_roles` covers the common case. Use `KeycloakClaimsBuilder` directly when a test also needs a custom expiry or other claims.
+
+Assert on `tracing` spans (for example what `GrpcTraceLayer` or `RequestContext` recorded) with `capture_spans`. It installs a thread-local subscriber, so use the default current-thread `#[tokio::test]` runtime:
+
+```rust
+use rust_grpc_lib::testing::capture_spans;
+
+let (spans, _guard) = capture_spans();
+// ... call the code under test ...
+assert_eq!(spans.field("rpc", "grpc.status").as_deref(), Some("Ok"));
 ```
 
 Check the wiring of a running server with the conformance helpers. The library cannot enumerate your RPCs, so pass an explicit list of `"/package.Service/Method"` paths. Build the service part from the `SERVICE_NAME` const that tonic generates next to every server (it is the fully qualified `package.Service` name, and the same value the server reports through `NamedService::NAME`), so a renamed package or service is a compile error in your test instead of a silent `unimplemented`:
@@ -400,7 +431,8 @@ Marker attribute consumed by `#[keycloak_authenticated_service]`. Two variants:
 | `jwks-url` | off | Enables JWKS key retrieval and rotation from a URL via `KeyValidatorConfig::from_jwks_url` (opt-in; pulls in an HTTP client) |
 | `unauthenticated` | off | Enables `from_endpoint` (no-auth constructor) on generated clients; for test harnesses only |
 | `build` | off | Enables proto code-generation helpers (`build_support` module) |
-| `test-util` | off | Enables the `testing` module: claims builders, `RequestContext::for_test`, claim injection and auth conformance helpers; for `[dev-dependencies]` only |
+| `test-util` | off | Enables the `testing` module: claims builders, `RequestContext::for_test`, claim injection, span capture and auth conformance helpers; for `[dev-dependencies]` only |
+| `trace` | off | Enables `trace::GrpcTraceLayer` (a span per RPC) and the `RpcMethod`/`RpcSpan` request extensions; adds `tower` and `tower-http` (implies `auth`) |
 
 ### Environment variables
 
