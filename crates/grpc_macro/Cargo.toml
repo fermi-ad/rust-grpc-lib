@@ -1,6 +1,6 @@
 [package]
 name = "grpc-macro"
-version = "0.2.0"
+version = "0.3.0"
 description = "Provides the macro for auto-deriving the internal GrpcClient trait on generated tonic structs"
 edition = "2024"
 publish = false

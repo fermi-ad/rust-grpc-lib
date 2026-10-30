@@ -1,0 +1,5 @@
+error: `RequestContext` needs a message type argument, such as `RequestContext<MyRequest>`
+  --> src/compile_fail_cases/context_without_message_type.rs:17:35
+   |
+17 |         ctx: rust_grpc_lib::auth::RequestContext,
+   |                                   ^^^^^^^^^^^^^^
