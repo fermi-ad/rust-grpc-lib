@@ -9,6 +9,10 @@
 //!
 //! - [`wrap_service`] (no direct `tower` dependency needed), and
 //! - `ExampleDbServer::with_interceptor(inner, JwtValidationService::new(..))`.
+//!
+//! The `test-util` conformance helpers (`assert_all_rpcs_require_auth` and
+//! `assert_all_rpcs_require_role`) are run against the same wiring, plus
+//! against a server that forgot to install auth, which they must flag.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -30,6 +34,7 @@ use rust_grpc_lib::auth::{
     ClientJwtInterceptor, JwtValidationService, KeyValidator, KeyValidatorConfig, KeycloakClaims,
     RequestContext, wrap_service,
 };
+use rust_grpc_lib::testing::{assert_all_rpcs_require_auth, assert_all_rpcs_require_role};
 
 use crate::services::example::{
     IdList, ReplyOne, ReplyTwo,
@@ -91,6 +96,8 @@ impl ExampleDb for Stub {
 enum Wiring {
     WrapService,
     WithInterceptor,
+    /// No auth at all: the mistake the conformance helpers exist to catch.
+    Unprotected,
 }
 
 struct Running {
@@ -125,6 +132,7 @@ async fn start(wiring: Wiring) -> Running {
             Stub,
             JwtValidationService::<KeycloakClaims, _>::new(validator),
         )),
+        Wiring::Unprotected => router.add_service(ExampleDbServer::new(Stub)),
     };
 
     tokio::spawn(async move {
@@ -221,4 +229,93 @@ async fn wrap_service_guards_app_rpcs_and_leaves_health_open() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn with_interceptor_guards_app_rpcs_and_leaves_health_open() {
     assert_behaviour(Wiring::WithInterceptor).await;
+}
+
+// ---------------------------------------------------------------------------
+// Conformance helpers
+// ---------------------------------------------------------------------------
+
+fn rpc_paths() -> [String; 2] {
+    [
+        format!("/{SERVICE_NAME}/getEndPointOne"),
+        format!("/{SERVICE_NAME}/getEndPointTwo"),
+    ]
+}
+
+async fn connect(addr: SocketAddr) -> Channel {
+    Channel::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap()
+}
+
+async fn assert_conformance(wiring: Wiring) {
+    let running = start(wiring).await;
+    let channel = connect(running.addr).await;
+    let paths = rpc_paths();
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+
+    assert_all_rpcs_require_auth(channel.clone(), &paths).await;
+
+    // Only `getEndPointOne` declares a role (the stub checks for "operator").
+    assert_all_rpcs_require_role(channel, &paths[..1], &make_jwt(&["viewer"])).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conformance_helpers_pass_with_wrap_service() {
+    assert_conformance(Wiring::WrapService).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conformance_helpers_pass_with_with_interceptor() {
+    assert_conformance(Wiring::WithInterceptor).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[should_panic(expected = "auth conformance failed")]
+async fn conformance_flags_a_server_without_auth() {
+    let running = start(Wiring::Unprotected).await;
+    let channel = connect(running.addr).await;
+    let paths = rpc_paths();
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+
+    assert_all_rpcs_require_auth(channel, &paths).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[should_panic(expected = "expected PermissionDenied")]
+async fn role_conformance_flags_a_token_that_is_allowed() {
+    let running = start(Wiring::WrapService).await;
+    let channel = connect(running.addr).await;
+    let path = format!("/{SERVICE_NAME}/getEndPointOne");
+
+    // An operator token is allowed, so the "without the role" check must fail.
+    assert_all_rpcs_require_role(channel, &[path.as_str()], &make_jwt(&["operator"])).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[should_panic(expected = "open service")]
+async fn conformance_refuses_the_health_service() {
+    let running = start(Wiring::WrapService).await;
+    let channel = connect(running.addr).await;
+
+    assert_all_rpcs_require_auth(channel, &["/grpc.health.v1.Health/Check"]).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn call_rpc_reports_the_status_for_a_valid_token() {
+    let running = start(Wiring::WrapService).await;
+    let channel = connect(running.addr).await;
+    let path = format!("/{SERVICE_NAME}/getEndPointOne");
+
+    let ok =
+        rust_grpc_lib::testing::call_rpc(channel.clone(), &path, Some(&make_jwt(&["operator"])))
+            .await;
+    assert!(ok.is_ok(), "{ok:?}");
+
+    let denied = rust_grpc_lib::testing::call_rpc(channel, &path, None)
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code(), Code::Unauthenticated);
 }
