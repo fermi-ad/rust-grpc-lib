@@ -230,21 +230,25 @@ let ctx = RequestContext::for_test(claims.clone(), SetDataRequest::default());
 let request = request_with_claims(SetDataRequest::default(), claims);
 ```
 
-Check the wiring of a running server with the conformance helpers. The library cannot enumerate your RPCs, so pass an explicit list of `"/package.Service/Method"` paths (the `Method` part is exactly as it appears in the generated server's `match req.uri().path()`):
+Check the wiring of a running server with the conformance helpers. The library cannot enumerate your RPCs, so pass an explicit list of `"/package.Service/Method"` paths. Build the service part from the `SERVICE_NAME` const that tonic generates next to every server (it is the fully qualified `package.Service` name, and the same value the server reports through `NamedService::NAME`), so a renamed package or service is a compile error in your test instead of a silent `unimplemented`:
 
 ```rust
 use rust_grpc_lib::testing::{assert_all_rpcs_require_auth, assert_all_rpcs_require_role};
+use my_proto::daq_server::SERVICE_NAME; // generated: "pkg.Daq"
 
 let channel = tonic::transport::Channel::from_shared(format!("http://{addr}"))?
     .connect()
     .await?;
-let rpcs = ["/pkg.Daq/ReadData", "/pkg.Daq/SetData"];
+let read = format!("/{SERVICE_NAME}/ReadData");
+let set = format!("/{SERVICE_NAME}/SetData");
 
 // No token and a malformed token are both `Unauthenticated`.
-assert_all_rpcs_require_auth(channel.clone(), &rpcs).await;
+assert_all_rpcs_require_auth(channel.clone(), &[&read, &set]).await;
 // A valid token without the role is `PermissionDenied` (only list RPCs that declare roles).
-assert_all_rpcs_require_role(channel, &["/pkg.Daq/SetData"], &viewer_token).await;
+assert_all_rpcs_require_role(channel, &[&set], &viewer_token).await;
 ```
+
+`SERVICE_NAME` also works for the health reporter and for filtering health out of a list of paths. The `Method` part still has to be typed by hand, exactly as the proto spells it and as it appears in the generated server's `match req.uri().path()` (the `ExampleDB` fixture, for example, defines `getEndPointOne`, not `GetEndPointOne`). A wrong method name is answered with `unimplemented`: the role check reports that as a failure, but the no-token check cannot, because auth rejects the call before routing.
 
 Do not list the health service: it is unauthenticated by design, and the helpers panic if you do. Do not enable `test-util` in a production build.
 
