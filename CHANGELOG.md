@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.8.0] — 2026-10-30
+
+### Added
+
+- **`test-util` feature** (off by default; for `[dev-dependencies]`) enabling the new `rust_grpc_lib::testing` module. It turns on `auth` and `rust-auth-lib`'s `test-fixtures`, and adds an optional `tonic-prost` dependency for the conformance helpers.
+  - `testing::KeycloakClaimsBuilder` and `testing::test_fixtures` are re-exported from `rust-auth-lib`, so consumers can build `KeycloakClaims` with any subject, expiry and roles and mint signed tokens without a direct `rust-auth-lib` dependency.
+  - `RequestContext::for_test(claims, message)` builds a context for a handler that takes `RequestContext<T>`. It goes through `try_from_request`, so the result has the shape a handler sees in production (empty metadata, no remote address, no `rpc_method`, claims still in the extensions).
+  - `testing::with_claims(request, claims)` and `testing::request_with_claims(message, claims)` inject claims into a `tonic::Request`, for tests of handlers that still take `Request<T>` or are guarded by `#[keycloak_authenticated_service]`.
+  - `testing::assert_all_rpcs_require_auth(channel, &paths)` calls each `"/package.Service/Method"` path with no token and with a malformed token and asserts `Unauthenticated` for both.
+  - `testing::assert_all_rpcs_require_role(channel, &paths, token)` asserts `PermissionDenied` for a valid token that lacks the required role, for services that declare roles.
+  - `testing::call_rpc(channel, path, token)` is the primitive behind both helpers, for custom checks.
+  - The helpers take an explicit list of paths because the library cannot enumerate a consumer's RPCs. They panic on an empty or malformed list and refuse `grpc.health.v1.Health` and `grpc.reflection.*` paths, which are unauthenticated by design. Failures are reported together, naming each path, the expected code and the actual status.
+- **Tests:** unit tests for the injection helpers, `for_test` and the path validation, and live-server tests (both `wrap_service` and `with_interceptor` wirings) showing that the helpers pass on a correctly wired server, flag a server with no auth, flag a role check that lets the caller through, and refuse the health service.
+
+### Changed
+
+- The `integration_tests` crate now builds claims with `KeycloakClaimsBuilder` instead of deserializing hand-written JSON.
+
+### Compatibility
+
+Additive. Nothing changes for a consumer that does not enable `test-util`.
+
+---
+
 ## [7.7.0] — 2026-10-29
 
 ### Added
