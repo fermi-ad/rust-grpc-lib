@@ -1,0 +1,5 @@
+error: a `RequestContext` parameter must be a plain binding, such as `ctx` or `mut ctx`
+  --> src/compile_fail_cases/context_destructured.rs:17:9
+   |
+17 |         (a, b): rust_grpc_lib::auth::RequestContext<String>,
+   |         ^^^^^^

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.7.0] — 2026-10-29
+
+### Added
+
+- **`RequestContext` parameters in `#[keycloak_authenticated_service]`.** A method whose first non-`self` parameter has a type whose last path segment is `RequestContext` now receives a context built by `RequestContext::try_from_request`. The emitted signature is rewritten to `tonic::Request<T>` under a hygienic name, so it still matches the generated trait. The role guard reuses `ctx.claims` rather than looking the claims up again. Methods that keep `Request<T>` behave as before; both forms can be mixed in one impl. Streaming requests (`RequestContext<Streaming<Req>>`) are supported.
+- **`#[keycloak_authenticated_service(claims = SomeClaims)]`** selects the claims type that `Request<T>` methods read from the extensions. Defaults to `KeycloakClaims`. The type must implement `Claims` and provide `has_role(&self, &str) -> bool`.
+- **Authorization-denial logging.** A denied call now emits a `tracing::warn!` event with target `rust_grpc_lib::authz` and message `authorization denied`, with the structured fields `user` (the `sub` claim), `rpc.service`, `rpc.method`, `required_roles`, `role_mode` (`any` or `all`) and `remote_addr` when known. Neither the token, nor the other claims, nor the roles the caller holds are logged. The client still receives `permission_denied("required role not present")`. Rate limiting is deliberately left to the consumer's subscriber filters.
+- **Precise `#[async_trait]` order error.** Placing `#[keycloak_authenticated_service]` below `#[async_trait]` is detected (a method with no `async` and an `'async_trait` lifetime parameter) and reported as `` `#[keycloak_authenticated_service]` must be placed above `#[async_trait]` `` instead of two opaque type errors.
+- **Tests:** `RequestContext` rewrite for unary and streaming handlers, role guard through the context, missing claims, mixed `Request<T>`/`RequestContext<T>` impls, `self: Arc<Self>` receivers, `#[async_trait]` below the macro, denial logging captured with a `tracing` subscriber (fields, `any`/`all` modes, no event on success, no leaked roles) and `trybuild` compile-fail tests for error messages and spans.
+
+### Changed
+
+- **Dependency policy for macro consumers.** The expansion names `::rust_grpc_lib`, `::tonic` and `::tracing`, so it uses whatever versions the consuming crate depends on; `rust-grpc-lib` does not re-export or pin them. Consumers must depend on them under their normal names (renaming a dependency with `package = ".."` is not supported). Three couplings remain and are documented on the macro: the consumer needs `tonic` and `tracing` as direct dependencies; and its `tonic` must be semver-compatible with the one `rust-grpc-lib` is built against, because `RequestContext::try_from_request` and the guard exchange `tonic::Request` and `tonic::Status` with the consumer's code.
+- **`tracing` is a required dependency.** `rust-grpc-lib` depends on `tracing` unconditionally. The generated guard always contains its `::tracing` calls (the missing-claims `error` and the denial `warn`), and `RequestContext::try_from_request` always logs a missing claims extension.
+- The guard's missing-claims error is now `Status::internal("authentication is not configured")` (it used to name `JwtValidationLayer`), with the detail logged server-side by `tracing::error!`. This matches `RequestContext::try_from_request`. The status code is unchanged. The hint no longer reaches the remote client.
+- Macro errors are reported with `syn::Error` spans on the offending tokens, and one error per bad method is reported at once. `#[roles]` now rejects an empty role list, trailing tokens and a duplicate `#[roles]` on one method.
+- `grpc-macro` bumped to 0.3.0.
+
+### Compatibility
+
+Additive for consumers, with one addition to the macro's requirements: a crate that uses a `#[roles]` guard must now have `tracing` as a direct dependency, because the guard logs through `::tracing`. The macro still needs the `auth` feature of `rust-grpc-lib` for `KeycloakClaims`.
+
+---
+
 ## [7.6.0] — 2026-10-29
 
 ### Added

@@ -182,6 +182,8 @@ async fn set_data(
 
 `RequestContext<T, C = KeycloakClaims>` is generic over the claims type; `C` must implement `Claims` (and be `Clone` to call `try_from_request`). `has_role()` is only available for `KeycloakClaims`. `try_from_request` also works for streaming requests (`RequestContext<Streaming<Req>>`). `is_expired()` and `exp_unix()` let a long-lived stream decide when to end. If the JWT layer is not installed, it returns `Status::internal("authentication is not configured")` and logs the detail server-side only.
 
+Inside a `#[keycloak_authenticated_service]` impl you do not need to call `try_from_request` yourself: declare the parameter as `RequestContext<T>` and the macro does it for you (see below).
+
 ### Keeping health checks open (per-service auth)
 
 `Server::layer(validator_into_layer(..))` wraps every service, so unauthenticated health probes are rejected too. There is no exemption list. To keep a service open, authenticate each application service individually and add the open service unwrapped:
@@ -297,7 +299,39 @@ Generates a `from_endpoint(endpoint)` constructor with no auth wiring. Applied a
 
 ### `#[keycloak_authenticated_service]`
 
-Applied to an `impl Trait for Type` block. Injects Keycloak role-checking guards into methods annotated with `#[roles(...)]`. Methods without `#[roles(...)]` are left untouched — a valid JWT is still required by `JwtValidationLayer`, but no role check is injected by this macro.
+Applied to an `impl Trait for Type` block. Injects Keycloak role-checking guards into methods annotated with `#[roles(...)]`. A valid JWT is still required by the JWT validation layer for every method; methods without `#[roles(...)]` just get no role check from this macro.
+
+**Placement.** Write it *above* `#[async_trait]` / `#[tonic::async_trait]`. The wrong order is a compile error that says so.
+
+```rust
+#[rust_grpc_lib::keycloak_authenticated_service]
+#[tonic::async_trait]
+impl Daq for MyDaqService { /* ... */ }
+```
+
+**`RequestContext` parameters.** The first non-`self` parameter of a method may be a `RequestContext<T>` instead of a `tonic::Request<T>`. The macro rewrites the emitted signature back to `Request<T>` (so it still matches the generated trait) and starts the body with `RequestContext::try_from_request(..)?`. The role guard reuses `ctx.claims`, so the claims are looked up once. Both forms can be mixed in one impl, and streaming requests work (`RequestContext<Streaming<Req>>`).
+
+```rust
+#[roles(all("operator"))]
+async fn set_data(
+    &self,
+    ctx: RequestContext<SetDataRequest>,
+) -> Result<Response<SetDataResponse>, Status> {
+    tracing::info!(user = ctx.sub(), "set_data");
+    // ctx.message, ctx.claims, ctx.metadata, ctx.remote_addr ...
+    todo!()
+}
+```
+
+**Custom claims.** `#[keycloak_authenticated_service(claims = MyClaims)]` selects the claims type that `Request<T>` methods read from the extensions (default `KeycloakClaims`). `MyClaims` must implement `Claims` and have a `has_role(&self, &str) -> bool` method. A `RequestContext<T, C>` parameter uses its own `C`.
+
+**Consumer dependencies.** The expansion names `::rust_grpc_lib`, `::tonic` and `::tracing`, so it uses whatever versions your crate depends on; this library neither pins nor re-exports them. Three things follow, and they cannot be avoided:
+
+- Depend on `rust-grpc-lib`, `tonic` and `tracing` under their normal names. Renaming a dependency (`package = ".."`) is not supported.
+- Your crate needs `tonic` and `tracing` as direct dependencies, because the guard's denial log is emitted through `::tracing`. Logging is not optional and there is no feature to turn it off.
+- Your `tonic` must be semver-compatible with the one `rust-grpc-lib` is built against, because `RequestContext` and the guard exchange `tonic::Request` and `tonic::Status` with your handlers.
+
+**Denied calls are logged.** When a caller lacks the required roles the client receives `permission_denied("required role not present")`, and the server emits a `warn` event with target `rust_grpc_lib::authz` and message `authorization denied`. Its fields are `user` (the `sub` claim), `rpc.service` (the trait name), `rpc.method` (the Rust method name), `required_roles`, `role_mode` (`any` or `all`) and `remote_addr` when known. The token, the other claims and the roles the caller actually holds are never logged. Filter or route it with `RUST_LOG=rust_grpc_lib::authz=warn`. Repeated denials are not rate limited by the library; use your subscriber's filters if that matters.
 
 ### `#[roles(...)]`
 
@@ -316,8 +350,7 @@ Marker attribute consumed by `#[keycloak_authenticated_service]`. Two variants:
 
 | Feature | Default | Description |
 |---|---|---|
-| `auth` | ✅ on | Enables JWT auth; generated clients gain `from_endpoint_with_provider`. Also enables `tracing` |
-| `tracing` | ✅ on (via `auth`) | Adds the `tracing` dependency; misconfiguration detail from `RequestContext` is logged server-side |
+| `auth` | ✅ on | Enables JWT auth; generated clients gain `from_endpoint_with_provider` |
 | `jwks-url` | off | Enables JWKS key retrieval and rotation from a URL via `KeyValidatorConfig::from_jwks_url` (opt-in; pulls in an HTTP client) |
 | `unauthenticated` | off | Enables `from_endpoint` (no-auth constructor) on generated clients; for test harnesses only |
 | `build` | off | Enables proto code-generation helpers (`build_support` module) |
@@ -377,7 +410,7 @@ This is a Cargo workspace with three crates:
 |---|---|---|
 | `rust-grpc-lib` | [`crates/core/`](crates/core/) | The main library crate consumers depend on. Contains the connection pool, auth wiring, and build-support helpers. |
 | `grpc-macro` | [`crates/grpc_macro/`](crates/grpc_macro/) | Proc-macro crate providing `#[derive(GrpcClient)]`, `#[derive(GrpcNoAuthClient)]`, `#[keycloak_authenticated_service]`, and `#[roles(...)]`. Re-exported from the main crate — consumers never need to depend on this directly. |
-| `integration_tests` | [`crates/integration_tests/`](crates/integration_tests/) | Integration-test crate. Exercises the full client→server gRPC round-trip with real JWT auth and tests the `#[keycloak_authenticated_service]` macro expansion. |
+| `integration_tests` | [`crates/integration_tests/`](crates/integration_tests/) | Integration-test crate. Exercises the full client→server gRPC round-trip with real JWT auth, tests the `#[keycloak_authenticated_service]` macro expansion, and holds the `trybuild` compile-fail cases in `src/compile_fail_cases/`. |
 
 ### Integration test fixtures
 
