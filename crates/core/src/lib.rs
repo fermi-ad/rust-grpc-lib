@@ -62,7 +62,7 @@ pub use grpc_macro::GrpcNoAuthClient;
 /// Attribute macro applied to `impl Trait for Type` blocks that injects
 /// Keycloak role-checking guards into methods annotated with `#[roles(...)]`.
 ///
-/// Re-exported here so consumers can write `#[rust_grpc_lib::authenticated_service]`
+/// Re-exported here so consumers can write `#[rust_grpc_lib::keycloak_authenticated_service]`
 /// without a direct dependency on `grpc-macro`.
 #[cfg(any(feature = "auth", doc, test))]
 pub use grpc_macro::keycloak_authenticated_service;

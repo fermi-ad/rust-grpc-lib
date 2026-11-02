@@ -1,6 +1,6 @@
 [package]
 name = "rust-grpc-lib"
-version = "7.5.0"
+version = "7.6.0"
 description = "A library to encapsulate the Fermilab-specific gRPC interface generation and transport logic for Rust projects"
 repository = "https://github.com/fermi-ad/rust-grpc-lib"
 edition = "2024"
@@ -15,7 +15,8 @@ include = [
 
 [features]
 default = ["auth"]
-auth = ["dep:rust-auth-lib"]
+auth = ["dep:rust-auth-lib", "tracing"]
+tracing = ["dep:tracing"]
 build = ["dep:protoc-bin-vendored", "dep:tonic-prost-build"]
 jwks-url = ["rust-auth-lib/jwks-url"]
 unauthenticated = []
@@ -26,6 +27,7 @@ rust-auth-lib = { git = "https://github.com/fermi-ad/rust-auth-lib", tag = "v0.4
 protoc-bin-vendored = { version = "3", optional = true }
 rust-env-var-lib = { git = "https://github.com/fermi-ad/rust-env-var-lib", tag = "v1.2.0" }
 tonic = { version = "0.14", features = ["transport"] }
+tracing = { version = "0.1", optional = true }
 tonic-prost-build = { version = "0.14", optional = true }
 
 [dev-dependencies]

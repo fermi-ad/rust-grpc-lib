@@ -8,6 +8,8 @@
 //!
 //! - [`keycloak_authenticated_service_macro`] — unit-level tests for the `#[keycloak_authenticated_service]` macro
 //!   expansion (role checks, missing claims, `any`/`all` variants).
+//! - [`per_service_auth`] — per-service JWT auth via `wrap_service` and
+//!   `with_interceptor`, with an unauthenticated health service alongside.
 //! - [`integration_round_trip`] — full client→server gRPC round-trip tests
 //!   using a real tonic server on a loopback port with `JwtValidationLayer`.
 //!
@@ -29,6 +31,8 @@
 mod integration_round_trip;
 #[cfg(test)]
 mod keycloak_authenticated_service_macro;
+#[cfg(test)]
+mod per_service_auth;
 
 #[cfg(test)]
 pub mod google {
