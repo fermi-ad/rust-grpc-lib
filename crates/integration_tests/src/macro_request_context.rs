@@ -15,7 +15,6 @@
 
 use std::io;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use tonic::codec::{DecodeBuf, Decoder, Streaming};
 use tonic::{Code, Request, Response, Status};
@@ -23,29 +22,23 @@ use tracing_subscriber::fmt::MakeWriter;
 
 use rust_grpc_lib::auth::{Claims, KeycloakClaims, RequestContext};
 use rust_grpc_lib::keycloak_authenticated_service;
+use rust_grpc_lib::testing::{KeycloakClaimsBuilder, request_with_claims};
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
 fn make_claims(sub: &str, realm_roles: &[&str]) -> KeycloakClaims {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    serde_json::from_value(serde_json::json!({
-        "sub": sub,
-        "iat": now,
-        "exp": now + 3600,
-        "realm_access": { "roles": realm_roles },
-    }))
-    .expect("KeycloakClaims deserialization must succeed")
+    realm_roles
+        .iter()
+        .fold(KeycloakClaimsBuilder::new(sub), |builder, role| {
+            builder.realm_role(*role)
+        })
+        .build()
 }
 
 fn request_with<T>(message: T, claims: KeycloakClaims) -> Request<T> {
-    let mut request = Request::new(message);
-    request.extensions_mut().insert(claims);
-    request
+    request_with_claims(message, claims)
 }
 
 /// A decoder that never yields a message; enough to build a `Streaming` that

@@ -17,12 +17,11 @@
 //! 5. **`all(...)` variant** — every listed role must be present; a partial
 //!    match is rejected with `Status::permission_denied`.
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use tonic::{Code, Request, Response, Status};
 
 use rust_grpc_lib::auth::KeycloakClaims;
 use rust_grpc_lib::keycloak_authenticated_service;
+use rust_grpc_lib::testing::KeycloakClaimsBuilder;
 
 // ---------------------------------------------------------------------------
 // Minimal tonic-like service trait and server struct
@@ -64,28 +63,16 @@ impl EchoService for MultiRoleServer {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: build a KeycloakClaims value with the given realm roles.
-//
-// KeycloakClaims has private fields and no public constructor, so we
-// deserialize it from a JSON payload that matches its serde shape.
+// Helper: build a KeycloakClaims value with the given realm roles, using the
+// `test-util` claims builder.
 // ---------------------------------------------------------------------------
 fn make_claims(realm_roles: &[&str]) -> KeycloakClaims {
-    let roles_json: Vec<serde_json::Value> =
-        realm_roles.iter().map(|r| serde_json::json!(r)).collect();
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let json = serde_json::json!({
-        "sub": "test-user",
-        "iat": now,
-        "exp": now + 3600,
-        "realm_access": { "roles": roles_json }
-    });
-
-    serde_json::from_value(json).expect("KeycloakClaims deserialization must succeed")
+    realm_roles
+        .iter()
+        .fold(KeycloakClaimsBuilder::new("test-user"), |builder, role| {
+            builder.realm_role(*role)
+        })
+        .build()
 }
 
 // ---------------------------------------------------------------------------

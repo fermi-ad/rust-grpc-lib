@@ -144,6 +144,19 @@ fn rpc_method_extension_is_surfaced() {
 }
 
 #[test]
+fn for_test_builds_a_context_shaped_like_production() {
+    let ctx = RequestContext::for_test(claims(&["operator"]), "payload".to_string());
+
+    assert_eq!(ctx.message, "payload");
+    assert_eq!(ctx.sub(), "test-sub");
+    assert!(ctx.has_role("operator"));
+    assert!(ctx.metadata.is_empty());
+    assert!(ctx.remote_addr.is_none());
+    assert!(ctx.rpc_method.is_none());
+    assert!(ctx.extensions.get::<KeycloakClaims>().is_some());
+}
+
+#[test]
 fn expiry_accessors_reflect_the_claims() {
     let live = RequestContext::<()>::try_from_request(request_with_claims((), &[])).unwrap();
     assert!(!live.is_expired());

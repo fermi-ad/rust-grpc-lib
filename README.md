@@ -206,6 +206,52 @@ tonic::transport::Server::builder()
 
 `wrap_service` needs no direct `tower` dependency and keeps `NamedService`, so `set_serving` keeps working. Equivalent: `DaqServer::with_interceptor(MyDaqService, JwtValidationService::<KeycloakClaims, _>::new(validator))`.
 
+### Testing your service (`test-util`)
+
+Enable the `test-util` feature under `[dev-dependencies]` to get `rust_grpc_lib::testing`. It re-exports `rust-auth-lib`'s `KeycloakClaimsBuilder` and `test_fixtures`, so you do not need a direct dependency on it.
+
+```toml
+[dev-dependencies]
+rust-grpc-lib = { git = "...", tag = "vX.Y.Z", features = ["test-util"] }
+```
+
+Unit-test a handler without a server or a JWT:
+
+```rust
+use rust_grpc_lib::auth::RequestContext;
+use rust_grpc_lib::testing::{KeycloakClaimsBuilder, request_with_claims};
+
+let claims = KeycloakClaimsBuilder::new("alice").realm_role("operator").build();
+
+// A handler that takes `RequestContext<T>`:
+let ctx = RequestContext::for_test(claims.clone(), SetDataRequest::default());
+
+// A handler that still takes `Request<T>` (including `#[roles]`-guarded ones):
+let request = request_with_claims(SetDataRequest::default(), claims);
+```
+
+Check the wiring of a running server with the conformance helpers. The library cannot enumerate your RPCs, so pass an explicit list of `"/package.Service/Method"` paths. Build the service part from the `SERVICE_NAME` const that tonic generates next to every server (it is the fully qualified `package.Service` name, and the same value the server reports through `NamedService::NAME`), so a renamed package or service is a compile error in your test instead of a silent `unimplemented`:
+
+```rust
+use rust_grpc_lib::testing::{assert_all_rpcs_require_auth, assert_all_rpcs_require_role};
+use my_proto::daq_server::SERVICE_NAME; // generated: "pkg.Daq"
+
+let channel = tonic::transport::Channel::from_shared(format!("http://{addr}"))?
+    .connect()
+    .await?;
+let read = format!("/{SERVICE_NAME}/ReadData");
+let set = format!("/{SERVICE_NAME}/SetData");
+
+// No token and a malformed token are both `Unauthenticated`.
+assert_all_rpcs_require_auth(channel.clone(), &[&read, &set]).await;
+// A valid token without the role is `PermissionDenied` (only list RPCs that declare roles).
+assert_all_rpcs_require_role(channel, &[&set], &viewer_token).await;
+```
+
+`SERVICE_NAME` also works for the health reporter and for filtering health out of a list of paths. The `Method` part still has to be typed by hand, exactly as the proto spells it and as it appears in the generated server's `match req.uri().path()` (the `ExampleDB` fixture, for example, defines `getEndPointOne`, not `GetEndPointOne`). A wrong method name is answered with `unimplemented`: the role check reports that as a failure, but the no-token check cannot, because auth rejects the call before routing.
+
+Do not list the health service: it is unauthenticated by design, and the helpers panic if you do. Do not enable `test-util` in a production build.
+
 ### Edge/hardware service
 
 Runs close to hardware and pushes data upstream. Authenticates itself using a platform-injected token file (e.g. a Vault or Kubernetes secret).
@@ -354,6 +400,7 @@ Marker attribute consumed by `#[keycloak_authenticated_service]`. Two variants:
 | `jwks-url` | off | Enables JWKS key retrieval and rotation from a URL via `KeyValidatorConfig::from_jwks_url` (opt-in; pulls in an HTTP client) |
 | `unauthenticated` | off | Enables `from_endpoint` (no-auth constructor) on generated clients; for test harnesses only |
 | `build` | off | Enables proto code-generation helpers (`build_support` module) |
+| `test-util` | off | Enables the `testing` module: claims builders, `RequestContext::for_test`, claim injection and auth conformance helpers; for `[dev-dependencies]` only |
 
 ### Environment variables
 

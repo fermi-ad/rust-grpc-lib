@@ -108,6 +108,26 @@ impl<T, C: Claims> RequestContext<T, C> {
         })
     }
 
+    /// Build a context for a unit test, without a server or a JWT layer.
+    ///
+    /// The claims are inserted into the extensions and the context is then
+    /// built with [`try_from_request`](Self::try_from_request), so it has the
+    /// same shape a handler sees in production: empty metadata, no remote
+    /// address, no `rpc_method`, and the claims still present in
+    /// [`extensions`](Self::extensions). Set the public fields afterwards to
+    /// simulate metadata or a peer address.
+    ///
+    /// Available with the `test-util` feature.
+    #[cfg(any(feature = "test-util", test))]
+    pub fn for_test(claims: C, message: T) -> Self
+    where
+        C: Clone,
+    {
+        let mut request = Request::new(message);
+        request.extensions_mut().insert(claims);
+        Self::try_from_request(request).expect("claims were just inserted into the request")
+    }
+
     /// The token subject (`sub` claim).
     pub fn sub(&self) -> &str {
         self.claims.sub()
