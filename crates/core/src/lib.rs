@@ -11,6 +11,7 @@
 //! | [`build_support`] | `build` | Proto code-generation helpers for `build.rs` |
 //! | [`pool`] | always | Process-wide lazily-connected channel pool |
 //! | `testing` | `test-util` | Claims builders, `RequestContext::for_test`, and auth conformance helpers for tests |
+//! | `trace` | `trace` | `GrpcTraceLayer`: a span per RPC, plus the `RpcMethod` and `RpcSpan` request extensions |
 //!
 //! # Re-exported macros
 //!
@@ -52,6 +53,14 @@ pub mod pool;
 /// `[dev-dependencies]`. Do not enable it in a production build.
 #[cfg(any(feature = "test-util", test))]
 pub mod testing;
+
+/// Per-RPC `tracing` spans for a tonic server.
+///
+/// Enabled by the `trace` feature (off by default). The entry point is
+/// [`trace::GrpcTraceLayer`], installed with `Server::layer` before any other
+/// layer.
+#[cfg(any(feature = "trace", test))]
+pub mod trace;
 
 /// Derive macro that generates `from_endpoint_with_provider` on a tonic client
 /// struct, wiring it into [`pool::get_channel`] with JWT auth.

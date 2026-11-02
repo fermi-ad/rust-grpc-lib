@@ -15,14 +15,10 @@
 //! against a server that forgot to install auth, which they must flag.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use rust_auth_lib::{ForwardedToken, test_fixtures};
+use rust_auth_lib::ForwardedToken;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tokio::time::sleep;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Server};
@@ -31,8 +27,7 @@ use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, health_check_response::ServingStatus};
 
 use rust_grpc_lib::auth::{
-    ClientJwtInterceptor, JwtValidationService, KeyValidator, KeyValidatorConfig, KeycloakClaims,
-    RequestContext, wrap_service,
+    ClientJwtInterceptor, JwtValidationService, KeycloakClaims, RequestContext, wrap_service,
 };
 use rust_grpc_lib::testing::{assert_all_rpcs_require_auth, assert_all_rpcs_require_role};
 
@@ -41,30 +36,7 @@ use crate::services::example::{
     example_db_client::ExampleDbClient,
     example_db_server::{ExampleDb, ExampleDbServer, SERVICE_NAME},
 };
-
-const TEST_KID: &str = "per-service-test-kid";
-
-fn make_jwt(roles: &[&str]) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let payload = serde_json::json!({
-        "sub": "test-user",
-        "iat": now,
-        "exp": now + 3600,
-        "realm_access": { "roles": roles },
-    });
-    let key = EncodingKey::from_rsa_pem(test_fixtures::RSA_PRIVATE_PEM.as_bytes()).unwrap();
-    let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some(TEST_KID.to_string());
-    encode(&header, &payload, &key).unwrap()
-}
-
-fn make_validator() -> Arc<KeyValidator> {
-    let jwks = test_fixtures::make_jwks_json_str(TEST_KID);
-    Arc::new(KeyValidator::new(KeyValidatorConfig::from_jwks_str(&jwks)).unwrap())
-}
+use crate::support::{make_jwt, make_validator};
 
 /// A handler that reads the claims through `RequestContext`.
 struct Stub;
@@ -107,6 +79,8 @@ struct Running {
 }
 
 async fn start(wiring: Wiring) -> Running {
+    // Bound before the server task is spawned, so early connections wait in
+    // the accept backlog and no startup delay is needed.
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let validator = make_validator();
@@ -143,7 +117,6 @@ async fn start(wiring: Wiring) -> Running {
             .await
             .unwrap();
     });
-    sleep(Duration::from_millis(50)).await;
 
     Running {
         addr,

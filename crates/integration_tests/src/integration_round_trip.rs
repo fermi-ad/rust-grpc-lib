@@ -18,64 +18,24 @@
 //! submodule, run `bash scripts/gen-test-fixtures.sh`.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 extern crate prost;
 
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use rust_auth_lib::{ForwardedToken, test_fixtures};
+use rust_auth_lib::ForwardedToken;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
-use tokio::time::sleep;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use tonic::{Code, Request, Response, Status};
 
-use rust_grpc_lib::auth::{KeyValidator, KeyValidatorConfig, KeycloakClaims, validator_into_layer};
+use rust_grpc_lib::auth::{KeycloakClaims, validator_into_layer};
 
 use crate::services::example::{
     IdList, ReplyOne, ReplyTwo,
     example_db_client::ExampleDbClient,
     example_db_server::{ExampleDb, ExampleDbServer},
 };
-
-const TEST_KID: &str = "integration-test-kid";
-
-// ---------------------------------------------------------------------------
-// JWT helpers
-// ---------------------------------------------------------------------------
-
-fn make_jwt(realm_roles: &[&str]) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let roles_json: Vec<serde_json::Value> =
-        realm_roles.iter().map(|r| serde_json::json!(r)).collect();
-
-    let payload = serde_json::json!({
-        "sub": "test-user",
-        "iat": now,
-        "exp": now + 3600,
-        "iss": null,
-        "preferred_username": "tester",
-        "realm_access": { "roles": roles_json }
-    });
-
-    let encoding_key = EncodingKey::from_rsa_pem(test_fixtures::RSA_PRIVATE_PEM.as_bytes())
-        .expect("valid RSA PEM");
-    let mut header = Header::new(Algorithm::RS256);
-    header.kid = Some(TEST_KID.to_string());
-    encode(&header, &payload, &encoding_key).expect("token encoding must succeed")
-}
-
-fn make_validator() -> Arc<KeyValidator> {
-    let jwks = test_fixtures::make_jwks_json_str(TEST_KID);
-    let config = KeyValidatorConfig::from_jwks_str(&jwks);
-    Arc::new(KeyValidator::new(config).expect("validator construction must succeed"))
-}
+use crate::support::{make_jwt, make_validator};
 
 // ---------------------------------------------------------------------------
 // Stub ExampleDB server implementation
@@ -139,9 +99,8 @@ async fn start_server() -> (SocketAddr, oneshot::Sender<()>) {
             .expect("server must not error");
     });
 
-    // Give the server a moment to start accepting connections.
-    sleep(Duration::from_millis(50)).await;
-
+    // The listener is already bound, so early connections wait in the accept
+    // backlog and no startup delay is needed.
     (addr, shutdown_tx)
 }
 

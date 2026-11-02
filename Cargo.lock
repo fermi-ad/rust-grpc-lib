@@ -1357,9 +1357,11 @@ dependencies = [
 
 [[package]]
 name = "rust-grpc-lib"
-version = "7.8.0"
+version = "7.9.0"
 dependencies = [
  "grpc-macro",
+ "http-body",
+ "pin-project-lite",
  "protoc-bin-vendored",
  "rust-auth-lib",
  "rust-env-var-lib",
@@ -1367,7 +1369,10 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tower",
+ "tower-http",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2044,6 +2049,7 @@ dependencies = [
  "tower",
  "tower-layer",
  "tower-service",
+ "tracing",
  "url",
 ]
 

@@ -14,6 +14,8 @@
 //!   expiry and roles, and [`test_fixtures`] mints signed tokens against a
 //!   test key pair. Both come from `rust-auth-lib`, so a direct dependency on
 //!   it is not needed.
+//! - [`claims_with_roles`] is shorthand for the builder when a test only needs
+//!   a subject and some realm roles.
 //! - [`RequestContext::for_test`](crate::auth::RequestContext::for_test) builds
 //!   a context for a handler that takes `RequestContext<T>`.
 //! - [`with_claims`] and [`request_with_claims`] put claims into a
@@ -22,6 +24,8 @@
 //!   `#[keycloak_authenticated_service]`).
 //! - [`assert_all_rpcs_require_auth`] and [`assert_all_rpcs_require_role`] are
 //!   black-box conformance checks that run against a live server.
+//! - [`capture_spans`] records the fields of every `tracing` span, for tests
+//!   that assert on what `GrpcTraceLayer` or `RequestContext` recorded.
 //!
 //! # Example
 //!
@@ -44,14 +48,31 @@
 
 use tonic::Request;
 
+use crate::auth::KeycloakClaims;
+
 mod conformance;
+mod spans;
+#[cfg(test)]
+mod tests;
 
 pub use conformance::{assert_all_rpcs_require_auth, assert_all_rpcs_require_role, call_rpc};
 pub use rust_auth_lib::test_fixtures;
 pub use rust_auth_lib::test_fixtures::KeycloakClaimsBuilder;
+pub use spans::{SpanCapture, SpanRecord, capture_spans};
 
-#[cfg(test)]
-mod tests;
+/// Build [`KeycloakClaims`] for subject `sub` holding the given realm roles.
+///
+/// Shorthand for chaining [`KeycloakClaimsBuilder::realm_role`] once per role.
+/// Use the builder directly when a test also needs a custom expiry or other
+/// claims.
+pub fn claims_with_roles(sub: &str, roles: &[&str]) -> KeycloakClaims {
+    roles
+        .iter()
+        .fold(KeycloakClaimsBuilder::new(sub), |builder, role| {
+            builder.realm_role(*role)
+        })
+        .build()
+}
 
 /// Insert `claims` into the extensions of `request` and return it.
 ///

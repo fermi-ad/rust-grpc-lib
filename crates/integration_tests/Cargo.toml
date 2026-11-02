@@ -5,10 +5,10 @@ edition = "2024"
 publish = false # Prevent accidental publishing to crates.io
 
 [dev-dependencies]
-rust-grpc-lib = { path = "../core", features = ["unauthenticated", "test-util"] }
+rust-grpc-lib = { path = "../core", features = ["unauthenticated", "test-util", "trace"] }
 jsonwebtoken = "11"
 prost = "0.14"
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "time", "sync"] }
 rust-auth-lib = { git = "https://github.com/fermi-ad/rust-auth-lib", tag = "v0.4.0", features = ["test-fixtures"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tonic = { version = "0.14", features = ["transport"] }

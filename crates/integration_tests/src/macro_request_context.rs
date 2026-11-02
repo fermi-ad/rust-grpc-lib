@@ -22,19 +22,14 @@ use tracing_subscriber::fmt::MakeWriter;
 
 use rust_grpc_lib::auth::{Claims, KeycloakClaims, RequestContext};
 use rust_grpc_lib::keycloak_authenticated_service;
-use rust_grpc_lib::testing::{KeycloakClaimsBuilder, request_with_claims};
+use rust_grpc_lib::testing::{claims_with_roles, request_with_claims};
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
 fn make_claims(sub: &str, realm_roles: &[&str]) -> KeycloakClaims {
-    realm_roles
-        .iter()
-        .fold(KeycloakClaimsBuilder::new(sub), |builder, role| {
-            builder.realm_role(*role)
-        })
-        .build()
+    claims_with_roles(sub, realm_roles)
 }
 
 fn request_with<T>(message: T, claims: KeycloakClaims) -> Request<T> {
