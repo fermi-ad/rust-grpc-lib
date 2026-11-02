@@ -1,0 +1,5 @@
+error: `#[keycloak_authenticated_service]` must be placed above `#[async_trait]`; `#[async_trait]` has already rewritten this method
+  --> src/compile_fail_cases/async_trait_order.rs:17:14
+   |
+17 |     async fn echo(&self, request: Request<String>) -> Result<Response<String>, Status> {
+   |              ^^^^

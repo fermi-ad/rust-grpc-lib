@@ -1,0 +1,5 @@
+error: unknown argument `strict`; expected `claims = <path>`
+  --> src/compile_fail_cases/unknown_argument.rs:13:34
+   |
+13 | #[keycloak_authenticated_service(strict)]
+   |                                  ^^^^^^

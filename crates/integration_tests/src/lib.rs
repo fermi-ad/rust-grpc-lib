@@ -28,9 +28,13 @@
 //! submodule, run `bash scripts/gen-test-fixtures.sh`.
 
 #[cfg(test)]
+mod compile_fail;
+#[cfg(test)]
 mod integration_round_trip;
 #[cfg(test)]
 mod keycloak_authenticated_service_macro;
+#[cfg(test)]
+mod macro_request_context;
 #[cfg(test)]
 mod per_service_auth;
 
