@@ -1,10 +1,6 @@
 [package]
 name = "rust-grpc-lib"
-<<<<<<< HEAD
-version = "7.9.0"
-=======
-version = "7.6.0"
->>>>>>> b12b27d (Add RequestContext and per-service auth constructors (v7.6.0))
+version = "7.10.0"
 description = "A library to encapsulate the Fermilab-specific gRPC interface generation and transport logic for Rust projects"
 repository = "https://github.com/fermi-ad/rust-grpc-lib"
 edition = "2024"
@@ -41,6 +37,13 @@ trace = [
     "dep:tower",
     "dep:tower-http",
 ]
+# `server::GrpcServer`: a builder for authenticated servers with an open health
+# service, response timeout, graceful shutdown and (with `trace`) per-RPC spans.
+server = [
+    "auth",
+    "dep:tokio",
+    "dep:tonic-health",
+]
 
 [dependencies]
 grpc-macro = { path = "../grpc_macro" }
@@ -48,12 +51,10 @@ rust-auth-lib = { git = "https://github.com/fermi-ad/rust-auth-lib", tag = "v0.4
 protoc-bin-vendored = { version = "3", optional = true }
 rust-env-var-lib = { git = "https://github.com/fermi-ad/rust-env-var-lib", tag = "v1.2.0" }
 tonic = { version = "0.14", features = ["transport"] }
-<<<<<<< HEAD
 tracing = "0.1"
+tokio = { version = "1", default-features = false, features = ["net"], optional = true }
+tonic-health = { version = "0.14", optional = true }
 tonic-prost = { version = "0.14", optional = true }
-=======
-tracing = { version = "0.1", optional = true }
->>>>>>> b12b27d (Add RequestContext and per-service auth constructors (v7.6.0))
 tonic-prost-build = { version = "0.14", optional = true }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"], optional = true }
 pin-project-lite = { version = "0.2", optional = true }
@@ -69,6 +70,9 @@ pin-project-lite = "0.2"
 tower = { version = "0.5", default-features = false, features = ["util"] }
 tower-http = { version = "0.6", default-features = false, features = ["trace"] }
 tracing-subscriber = "0.3"
+# The `server` module also compiles under `cfg(test)` without the `server`
+# feature (like `trace` and `testing`), so `tonic-health` is repeated here.
+tonic-health = "0.14"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
 protoc-bin-vendored = "3"
 tonic-prost = "0.14"

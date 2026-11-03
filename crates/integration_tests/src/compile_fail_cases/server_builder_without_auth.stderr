@@ -1,0 +1,13 @@
+error[E0599]: the method `add_service` exists for struct `GrpcServerBuilder<AuthUnset>`, but its trait bounds were not satisfied
+ --> src/compile_fail_cases/server_builder_without_auth.rs:5:35
+  |
+5 |     let _ = GrpcServer::builder().add_service(());
+  |                                   ^^^^^^^^^^^ method cannot be called on `GrpcServerBuilder<AuthUnset>` due to unsatisfied trait bounds
+  |
+ ::: $WORKSPACE/crates/core/src/server.rs
+  |
+  | pub struct AuthUnset;
+  | -------------------- doesn't satisfy `AuthUnset: AuthMode`
+  |
+  = note: the following trait bounds were not satisfied:
+          `AuthUnset: AuthMode`

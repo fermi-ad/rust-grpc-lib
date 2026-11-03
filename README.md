@@ -184,9 +184,37 @@ async fn set_data(
 
 Inside a `#[keycloak_authenticated_service]` impl you do not need to call `try_from_request` yourself: declare the parameter as `RequestContext<T>` and the macro does it for you (see below).
 
+### Serving with `GrpcServer` (`server` feature)
+
+The opt-in `server` feature adds `rust_grpc_lib::server::GrpcServer`, a builder that does the wiring every service otherwise repeats: per-service authentication, an unauthenticated `grpc.health.v1.Health` service, a response timeout, graceful shutdown and, with the `trace` feature, `GrpcTraceLayer` installed as the outermost layer.
+
+```rust
+use std::time::Duration;
+use rust_grpc_lib::auth::KeyValidatorConfig;
+use rust_grpc_lib::server::GrpcServer;
+
+let config = KeyValidatorConfig::from_jwks_url(jwks_url, Duration::from_secs(300));
+
+GrpcServer::builder()
+    .timeout(Duration::from_secs(30))
+    .authenticate_with_config(config)? // or `.authenticate(validator)`
+    .add_service(DaqServer::new(MyDaqService))
+    .serve_with_shutdown("[::1]:50051".parse()?, shutdown_signal)
+    .await?;
+```
+
+- Every service added with `add_service` is wrapped with per-service auth, so a missing or invalid token is rejected with `Unauthenticated` before any handler runs. Health is the only open service.
+- `""` and every added service are reported `Serving` at start and `NotServing` as soon as the shutdown signal fires, before connections drain.
+- The builder starts without an authentication mode, and `add_service` and the `serve*` methods only exist after you choose one. Forgetting is a compile error, not a server that accepts every caller. `.dangerously_unauthenticated()` (behind the `unauthenticated` feature) is the explicit opt-out for test harnesses.
+- Tests bind port `0` and call `serve_on_listener(listener, shutdown)` to learn the OS-assigned port first.
+- Use the same claims type here and in `#[keycloak_authenticated_service(claims = ..)]` with `authenticate_with_claims::<C, _>(validator)`.
+- `ServeError::Bind` reports an unavailable address, `ServeError::Transport` a failure while serving.
+
+The conformance helpers in [`test-util`](#testing-your-service-test-util) work against this server as is; leave the health paths out of the list.
+
 ### Keeping health checks open (per-service auth)
 
-`Server::layer(validator_into_layer(..))` wraps every service, so unauthenticated health probes are rejected too. There is no exemption list. To keep a service open, authenticate each application service individually and add the open service unwrapped:
+`GrpcServer` does this for you. If you wire tonic by hand: `Server::layer(validator_into_layer(..))` wraps every service, so unauthenticated health probes are rejected too. There is no exemption list. To keep a service open, authenticate each application service individually and add the open service unwrapped:
 
 ```rust
 use rust_grpc_lib::auth::{KeycloakClaims, wrap_service};
@@ -434,6 +462,7 @@ Marker attribute consumed by `#[keycloak_authenticated_service]`. Two variants:
 | `build` | off | Enables proto code-generation helpers (`build_support` module) |
 | `test-util` | off | Enables the `testing` module: claims builders, `RequestContext::for_test`, claim injection, span capture and auth conformance helpers; for `[dev-dependencies]` only |
 | `trace` | off | Enables `trace::GrpcTraceLayer` (a span per RPC) and the `RpcMethod`/`RpcSpan` request extensions; adds `tower` and `tower-http` (implies `auth`) |
+| `server` | off | Enables `server::GrpcServer`, the server builder (per-service auth, open health service, timeout, graceful shutdown); adds `tonic-health` and `tokio` (implies `auth`). Combine with `trace` to get per-RPC spans automatically |
 
 ### Environment variables
 
