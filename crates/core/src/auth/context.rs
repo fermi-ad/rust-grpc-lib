@@ -136,7 +136,10 @@ impl<T, C: Claims> RequestContext<T, C> {
     }
 
     /// The token subject (`sub` claim).
-    pub fn sub(&self) -> &str {
+    pub fn sub(&self) -> &str
+    where
+        C: Claims,
+    {
         self.claims.sub()
     }
 
@@ -144,7 +147,10 @@ impl<T, C: Claims> RequestContext<T, C> {
     ///
     /// Long-lived stream handlers can compare this with the current time to
     /// decide when to end the stream.
-    pub fn exp_unix(&self) -> u64 {
+    pub fn exp_unix(&self) -> u64
+    where
+        C: Claims,
+    {
         self.claims.exp_unix()
     }
 
@@ -165,4 +171,20 @@ impl<T> RequestContext<T, KeycloakClaims> {
     pub fn has_role(&self, role: &str) -> bool {
         self.claims.has_role(role)
     }
+}
+
+/// The gRPC method an RPC was dispatched to, parsed from the request path
+/// `/<service>/<method>` (for example `/services.example.v1.ExampleDB/GetEndPointOne`).
+///
+/// tonic does not insert this on the server side, so it is populated by a
+/// library-owned layer that is not part of this release. Until that layer is
+/// installed, [`RequestContext::rpc_method`] is `None`. Anything that inserts
+/// an `RpcMethod` into the request extensions will be picked up by
+/// [`RequestContext::try_from_request`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RpcMethod {
+    /// Fully qualified service name, e.g. `services.example.v1.ExampleDB`.
+    pub service: String,
+    /// Method name, e.g. `GetEndPointOne`.
+    pub method: String,
 }
