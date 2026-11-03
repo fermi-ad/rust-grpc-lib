@@ -380,7 +380,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "grpc-macro"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "integration_tests"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "jsonwebtoken",
@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "rust-grpc-lib"
-version = "7.10.1"
+version = "7.11.0"
 dependencies = [
  "grpc-macro",
  "http-body",

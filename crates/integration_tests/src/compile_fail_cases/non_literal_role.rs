@@ -1,7 +1,7 @@
+// A role is a string literal or a path to a constant; any other expression is
+// rejected.
 use rust_grpc_lib::keycloak_authenticated_service;
 use tonic::{Request, Response, Status};
-
-const ADMIN: &str = "admin";
 
 trait Echo {
     fn echo(
@@ -14,7 +14,7 @@ struct Server;
 
 #[keycloak_authenticated_service]
 impl Echo for Server {
-    #[roles(any(ADMIN))]
+    #[roles(any(42))]
     async fn echo(&self, request: Request<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(request.into_inner()))
     }

@@ -1,8 +1,8 @@
 //! The per-`impl`-block context shared by every method expansion.
 //!
 //! [`Env`] holds what the emitted code needs to know about the block as a
-//! whole: which claims type to read and the service name to report in denial
-//! logs.
+//! whole: which claims type to read, the service name to report in denial
+//! logs, and whether the block is `strict`.
 //!
 //! The emitted code is rooted at `::rust_grpc_lib`. By policy every consumer
 //! depends on `rust-grpc-lib` (and `tonic` and `tracing`) under their normal
@@ -20,6 +20,8 @@ pub(super) struct Env {
     pub(super) claims_ty: TokenStream2,
     /// Name reported as `rpc.service` in denial events.
     pub(super) service: String,
+    /// Whether every method must declare an access policy.
+    pub(super) strict: bool,
 }
 
 impl Env {
@@ -29,6 +31,7 @@ impl Env {
     /// last segment of the implemented trait, or the self type for an
     /// inherent `impl`.
     pub(super) fn new(args: MacroArgs, impl_block: &ItemImpl) -> Self {
+        let strict = args.strict;
         let claims_ty = if let Some(path) = args.claims {
             quote! { #path }
         } else {
@@ -36,7 +39,11 @@ impl Env {
         };
         let service = service_name(impl_block);
 
-        Self { claims_ty, service }
+        Self {
+            claims_ty,
+            service,
+            strict,
+        }
     }
 }
 

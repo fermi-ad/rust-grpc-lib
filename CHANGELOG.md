@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.11.0] — 2026-11-03
+
+### Added
+
+- **`#[keycloak_authenticated_service(strict)]`.** In a `strict` block every method must declare an access policy; a method without one is a compile error that names it (all offending methods are reported in one compile). `strict` combines with `claims = ..` in either order. Without `strict` nothing changes: a method with no policy still gets no check from the macro.
+- **`#[any_authenticated]`**, a new access policy written on a method inside the annotated block: any caller with valid claims is allowed, no role is needed. For a `Request<T>` parameter the guard reads the claims and fails closed with `internal("authentication is not configured")` when they are missing (the same error and server-side log as `#[roles]`); a `RequestContext<T>` parameter already proves it.
+- **Typed roles.** `#[roles(any(..))]` and `#[roles(all(..))]` accept a path to a `&str` constant (`roles::OPERATOR`, `crate::roles::ADMIN`) as well as a string literal, and the two can be mixed. A role that is neither a literal nor a path is a compile error naming both accepted forms.
+- **`rust_grpc_lib::{roles, any_authenticated}`**, re-exported so that a policy attribute written outside a `#[keycloak_authenticated_service]` block fails with a clear message (see below) instead of "cannot find attribute". Inside an annotated block they need no import, because the outer macro strips them before name resolution.
+
+There is deliberately no `#[public]` policy. Authentication is done by the JWT layer, which wraps the whole service before any method runs, so an attribute on a method cannot make that method reachable without a token. An attribute with that name would suggest otherwise.
+
+### Changed
+
+- **A policy attribute that the outer macro did not strip is a compile error.** `#[roles]` and `#[any_authenticated]` on a method that reaches the compiler (an `impl` block that is not annotated with `#[keycloak_authenticated_service]`, once the attribute is imported) now fail with "has no effect here". The `roles` macro in `grpc-macro` used to be a pass-through no-op that would have left the method unchecked; it was not reachable through `rust-grpc-lib`, so no consumer could rely on it.
+- A method declaring more than one policy (for example `#[any_authenticated]` together with `#[roles(..)]`) is a compile error. A duplicate `#[roles]` was already rejected before this release; the rule now covers every policy.
+- The "unknown argument" error now lists both accepted arguments (`claims = <path>` or `strict`).
+- The `#[async_trait]` order error from 7.7.0 is reported before, and instead of, a missing-policy error, so a block with the attributes in the wrong order says so even in `strict` mode. The check itself is unchanged and applies with or without `strict`.
+
+### Internal
+
+- `grpc-macro` 0.4.0: a new `policy` module (parses and strips the policy attributes), `RoleItem` in `roles` for typed roles, `build_authenticated_guard` in `guard`, and unit tests for the argument, policy and role parsers.
+- `integration_tests` 0.1.2: new `macro_policies` runtime tests and `trybuild` cases for a missing policy in `strict` mode, a policy outside a service block, a duplicate policy, an invalid role expression and the `#[async_trait]` order under `strict`.
+
+### Compatibility
+
+Additive: code that compiles with 7.10.x compiles unchanged with 7.11.0, because `#[any_authenticated]` and `strict` are new and a method with two policies could only have been a duplicate `#[roles]`, which was already an error. Only the wording of some errors changes (a role that is not a string literal, and the parameter errors of `#[roles]`). `strict` is opt-in; it becomes the default in 8.0.0.
+
+`strict` applies to every method of the annotated block, so it is meant for an `impl` of a service trait whose methods are all RPC handlers. A helper method in the same block needs a policy too, and a policy requires the method to take a request parameter.
+
+---
+
 ## [7.10.1] — 2026-11-03
 
 ### Changed

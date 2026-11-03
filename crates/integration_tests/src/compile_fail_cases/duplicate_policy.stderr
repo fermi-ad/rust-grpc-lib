@@ -1,0 +1,5 @@
+error: a method declares exactly one access policy: `#[roles(..)]` or `#[any_authenticated]`
+  --> src/compile_fail_cases/duplicate_policy.rs:17:5
+   |
+17 |     #[roles(any("admin"))]
+   |     ^^^^^^^^^^^^^^^^^^^^^^

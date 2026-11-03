@@ -25,8 +25,8 @@ pub(super) enum RequestParam {
 ///   `tonic::Request<T>` under a hygienic name, and the returned prologue
 ///   rebuilds the context from it.
 /// - A `Request<T>` parameter is left alone (with an empty prologue); it is
-///   only inspected when `needs_guard` is set, to find the name the guard reads
-///   extensions from.
+///   only inspected when `needs_guard` is set (the policy reads the claims),
+///   to find the name the guard reads extensions from.
 ///
 /// Returns `None` when the method needs neither.
 pub(super) fn rewrite_first_param(
@@ -40,7 +40,8 @@ pub(super) fn rewrite_first_param(
         return if needs_guard {
             Err(syn::Error::new_spanned(
                 &sig.ident,
-                "`#[roles]` requires the method to take a request parameter",
+                "an access policy that reads the claims requires the method to take a request \
+                 parameter",
             ))
         } else {
             Ok(None)
@@ -54,7 +55,8 @@ pub(super) fn rewrite_first_param(
         let Pat::Ident(pat_ident) = pat_type.pat.as_ref() else {
             return Err(syn::Error::new_spanned(
                 &pat_type.pat,
-                "`#[roles]` needs a named request parameter, such as `request: Request<T>`",
+                "an access policy that reads the claims needs a named request parameter, \
+                 such as `request: Request<T>`",
             ));
         };
         let param = RequestParam::Request(pat_ident.ident.clone());

@@ -11,6 +11,10 @@
 //!
 //! - `keycloak_authenticated_service_macro` — unit-level tests for the `#[keycloak_authenticated_service]` macro
 //!   expansion (role checks, missing claims, `any`/`all` variants).
+//! - `macro_request_context` — the `RequestContext` rewrite and the
+//!   authorization-denial log.
+//! - `macro_policies` — typed roles, `#[any_authenticated]` and the `strict`
+//!   argument.
 //! - `per_service_auth` — per-service JWT auth via `wrap_service` and
 //!   `with_interceptor`, with an unauthenticated health service alongside.
 //! - `integration_round_trip` — full client→server gRPC round-trip tests
@@ -43,6 +47,8 @@ mod compile_fail;
 mod integration_round_trip;
 #[cfg(test)]
 mod keycloak_authenticated_service_macro;
+#[cfg(test)]
+mod macro_policies;
 #[cfg(test)]
 mod macro_request_context;
 #[cfg(test)]
