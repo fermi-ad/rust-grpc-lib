@@ -15,8 +15,7 @@ include = [
 
 [features]
 default = ["auth"]
-auth = ["dep:rust-auth-lib", "tracing"]
-tracing = ["dep:tracing"]
+auth = ["dep:rust-auth-lib"]
 build = ["dep:protoc-bin-vendored", "dep:tonic-prost-build"]
 jwks-url = ["rust-auth-lib/jwks-url"]
 unauthenticated = []

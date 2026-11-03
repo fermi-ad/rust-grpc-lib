@@ -166,19 +166,3 @@ impl<T> RequestContext<T, KeycloakClaims> {
         self.claims.has_role(role)
     }
 }
-
-/// The gRPC method an RPC was dispatched to, parsed from the request path
-/// `/<service>/<method>` (for example `/services.example.v1.ExampleDB/GetEndPointOne`).
-///
-/// tonic does not insert this on the server side, so it is populated by a
-/// library-owned layer that is not part of this release. Until that layer is
-/// installed, [`RequestContext::rpc_method`] is `None`. Anything that inserts
-/// an `RpcMethod` into the request extensions will be picked up by
-/// [`RequestContext::try_from_request`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RpcMethod {
-    /// Fully qualified service name, e.g. `services.example.v1.ExampleDB`.
-    pub service: String,
-    /// Method name, e.g. `GetEndPointOne`.
-    pub method: String,
-}
