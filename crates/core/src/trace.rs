@@ -7,9 +7,9 @@
 //! - [`RpcMethod`](crate::auth::RpcMethod), parsed from the request path. tonic
 //!   does not insert one on the server side, so this layer is what fills
 //!   [`RequestContext::rpc_method`](crate::auth::RequestContext::rpc_method).
-//! - [`RpcSpan`](crate::auth::RpcSpan), the span itself.
+//! - [`RpcSpan`], the span itself.
 //!   [`RequestContext::try_from_request`](crate::auth::RequestContext::try_from_request)
-//!   records the caller's `sub` onto it as `user`. See [`RpcSpan`](crate::auth::RpcSpan)
+//!   records the caller's `sub` onto it as `user`. See [`RpcSpan`]
 //!   for why it does not use `Span::current()`.
 //!
 //! Enabled by the `trace` feature (off by default).
@@ -87,6 +87,7 @@ pub struct GrpcTraceLayer;
 
 impl GrpcTraceLayer {
     /// Create the layer.
+    #[must_use = "a layer has no effect until it is installed with `Server::layer`"]
     pub fn new() -> Self {
         Self
     }

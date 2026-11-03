@@ -9,7 +9,12 @@
 //! - [`Config`] — a builder that wraps `tonic_prost_build::Builder` and
 //!   exposes attribute-injection methods for customising the generated code.
 //!
-//! Private helpers live in the [`file_utils`] and [`proto_rs`] sub-modules.
+//! Private helpers live in the `file_utils` and `proto_rs` sub-modules.
+//!
+//! Enabled by the `build` feature (off by default). It needs the optional
+//! `tonic-prost-build` dependency, so it is only present in the generated docs
+//! and doctests when that feature is on (`cargo doc --features build`,
+//! `cargo test --doc --features build`).
 
 use std::{env, error::Error, ffi::OsStr, fs, path::Path};
 
@@ -157,6 +162,7 @@ impl Config {
     ///   when the `auth` feature is enabled (the default).
     /// - `#[derive(::rust_grpc_lib::GrpcNoAuthClient)]` on every client
     ///   struct — when the `unauthenticated` feature is enabled.
+    #[must_use = "a `Config` does nothing until it is passed to `generate_protos`"]
     pub fn new() -> Self {
         let mut builder = tonic_prost_build::configure()
             .emit_rerun_if_changed(true)
@@ -186,12 +192,15 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "build")] {
     /// use rust_grpc_lib::build_support::Config;
     ///
     /// let mut config = Config::new();
     /// // Attaches a mock trait derive directly onto the generated gRPC client struct
     /// config = config.client_attribute("my_package.MyService", "#[derive(mockall::automock)]");
+    /// # }
     /// ```
+    #[must_use = "this consumes the `Config` and returns an updated one; the attribute is lost if the result is dropped"]
     pub fn client_attribute(self, path: &str, attribute: &str) -> Self {
         Config {
             builder: self.builder.client_attribute(path, attribute),
@@ -211,12 +220,15 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "build")] {
     /// use rust_grpc_lib::build_support::Config;
     ///
     /// let mut config = Config::new();
     /// // Conditionally compiles the entire client module structure using cargo feature gates
     /// config = config.client_mod_attribute("my_package.MyService", "#[cfg(feature = \"client\")]");
+    /// # }
     /// ```
+    #[must_use = "this consumes the `Config` and returns an updated one; the attribute is lost if the result is dropped"]
     pub fn client_mod_attribute(self, path: &str, attribute: &str) -> Self {
         Config {
             builder: self.builder.client_mod_attribute(path, attribute),
@@ -239,12 +251,15 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "build")] {
     /// use rust_grpc_lib::build_support::Config;
     ///
     /// let mut config = Config::new();
     /// // Derives enum-specific utilities (like string mapping) only on standalone enums
-    /// config.enum_attribute("my_package.UserRole", "#[derive(strum::EnumString, strum::Display)]");
+    /// config = config.enum_attribute("my_package.UserRole", "#[derive(strum::EnumString, strum::Display)]");
+    /// # }
     /// ```
+    #[must_use = "this consumes the `Config` and returns an updated one; the attribute is lost if the result is dropped"]
     pub fn enum_attribute(self, path: &str, attribute: &str) -> Self {
         Config {
             builder: self.builder.enum_attribute(path, attribute),
@@ -263,12 +278,15 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "build")] {
     /// use rust_grpc_lib::build_support::Config;
     ///
     /// let mut config = Config::new();
     /// // Injects a serde rule directly above the `hashed_password` struct field
     /// config = config.field_attribute("my_package.User.hashed_password", "#[serde(skip_serializing)]");
+    /// # }
     /// ```
+    #[must_use = "this consumes the `Config` and returns an updated one; the attribute is lost if the result is dropped"]
     pub fn field_attribute(self, path: &str, attribute: &str) -> Self {
         Config {
             builder: self.builder.field_attribute(path, attribute),
@@ -287,12 +305,15 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "build")] {
     /// use rust_grpc_lib::build_support::Config;
     ///
     /// let mut config = Config::new();
     /// // Applies a struct-specific macro only to the "User" message struct, ignoring enums
     /// config = config.message_attribute("my_package.User", "#[derive(SomeStructOnlyMacro)]");
+    /// # }
     /// ```
+    #[must_use = "this consumes the `Config` and returns an updated one; the attribute is lost if the result is dropped"]
     pub fn message_attribute(self, path: &str, attribute: &str) -> Self {
         Config {
             builder: self.builder.message_attribute(path, attribute),
@@ -311,12 +332,15 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "build")] {
     /// use rust_grpc_lib::build_support::Config;
     ///
     /// let mut config = Config::new();
     /// // Forces a specific custom handling or restriction macro directly onto the server trait
     /// config = config.server_attribute("my_package.MyService", "#[custom_server_gate]");
+    /// # }
     /// ```
+    #[must_use = "this consumes the `Config` and returns an updated one; the attribute is lost if the result is dropped"]
     pub fn server_attribute(self, path: &str, attribute: &str) -> Self {
         Config {
             builder: self.builder.server_attribute(path, attribute),
@@ -335,12 +359,15 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "build")] {
     /// use rust_grpc_lib::build_support::Config;
     ///
     /// let mut config = Config::new();
     /// // Disables specific Clippy warnings across the entire generated server codebase module
     /// config = config.server_mod_attribute("my_package.MyService", "#[allow(clippy::too_many_arguments)]");
+    /// # }
     /// ```
+    #[must_use = "this consumes the `Config` and returns an updated one; the attribute is lost if the result is dropped"]
     pub fn server_mod_attribute(self, path: &str, attribute: &str) -> Self {
         Config {
             builder: self.builder.server_mod_attribute(path, attribute),
@@ -360,12 +387,15 @@ impl Config {
     /// # Examples
     ///
     /// ```rust,no_run
+    /// # #[cfg(feature = "build")] {
     /// use rust_grpc_lib::build_support::Config;
     ///
     /// let mut config = Config::new();
     /// // Derives Serialize/Deserialize for EVERY message and enum under the package
     /// config = config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
+    /// # }
     /// ```
+    #[must_use = "this consumes the `Config` and returns an updated one; the attribute is lost if the result is dropped"]
     pub fn type_attribute(self, path: &str, attribute: &str) -> Self {
         Config {
             builder: self.builder.type_attribute(path, attribute),

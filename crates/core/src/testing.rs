@@ -10,7 +10,7 @@
 //! # What is here
 //!
 //! - [`KeycloakClaimsBuilder`] builds
-//!   [`KeycloakClaims`](crate::auth::KeycloakClaims) with arbitrary subject,
+//!   [`KeycloakClaims`] with arbitrary subject,
 //!   expiry and roles, and [`test_fixtures`] mints signed tokens against a
 //!   test key pair. Both come from `rust-auth-lib`, so a direct dependency on
 //!   it is not needed.
@@ -65,6 +65,7 @@ pub use spans::{SpanCapture, SpanRecord, capture_spans};
 /// Shorthand for chaining [`KeycloakClaimsBuilder::realm_role`] once per role.
 /// Use the builder directly when a test also needs a custom expiry or other
 /// claims.
+#[must_use = "the claims are returned, not installed anywhere; pass them to `with_claims` or a request context"]
 pub fn claims_with_roles(sub: &str, roles: &[&str]) -> KeycloakClaims {
     roles
         .iter()
@@ -78,7 +79,7 @@ pub fn claims_with_roles(sub: &str, roles: &[&str]) -> KeycloakClaims {
 ///
 /// This is what the JWT validation layer does in production. Use it to test a
 /// handler that takes `Request<T>` without running a server. `C` is normally
-/// [`KeycloakClaims`](crate::auth::KeycloakClaims).
+/// [`KeycloakClaims`].
 pub fn with_claims<T, C>(mut request: Request<T>, claims: C) -> Request<T>
 where
     C: Clone + Send + Sync + 'static,

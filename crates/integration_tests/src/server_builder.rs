@@ -102,6 +102,7 @@ async fn start<A: AuthMode + Send + 'static>(builder: GrpcServerBuilder<A>) -> R
         task,
     }
 }
+
 async fn connect(addr: SocketAddr) -> Channel {
     Channel::from_shared(format!("http://{addr}"))
         .unwrap()

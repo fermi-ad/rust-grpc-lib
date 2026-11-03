@@ -118,6 +118,9 @@ trait ContextService {
 
 struct ContextServer;
 
+// The `async fn` signatures are required: the macro only recognizes native
+// async methods, so the handlers cannot be rewritten to return `ready(..)`.
+#[allow(clippy::unused_async_trait_impl)]
 #[keycloak_authenticated_service(claims = rust_grpc_lib::auth::KeycloakClaims)]
 impl ContextService for ContextServer {
     /// `Request<T>` form with a role guard.
@@ -314,6 +317,8 @@ trait ArcService {
 
 struct ArcServer;
 
+// Same as `ContextServer`: the macro requires native `async fn` signatures.
+#[allow(clippy::unused_async_trait_impl)]
 #[keycloak_authenticated_service]
 impl ArcService for ArcServer {
     #[roles(any("admin"))]

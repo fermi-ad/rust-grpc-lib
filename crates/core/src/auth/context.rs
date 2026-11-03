@@ -87,16 +87,13 @@ impl<T, C: Claims> RequestContext<T, C> {
         let remote_addr = request.remote_addr();
         let (metadata, extensions, message) = request.into_parts();
 
-        let claims = match extensions.get::<C>() {
-            Some(claims) => claims.clone(),
-            None => {
-                tracing::error!(
-                    claims_type = type_name::<C>(),
-                    "request has no claims extension; the JWT validation layer or \
-                     interceptor is not installed for this service"
-                );
-                return Err(Status::internal("authentication is not configured"));
-            }
+        let Some(claims) = extensions.get::<C>().cloned() else {
+            tracing::error!(
+                claims_type = type_name::<C>(),
+                "request has no claims extension; the JWT validation layer or \
+                 interceptor is not installed for this service"
+            );
+            return Err(Status::internal("authentication is not configured"));
         };
 
         let rpc_method = extensions.get::<RpcMethod>().cloned();
@@ -125,6 +122,13 @@ impl<T, C: Claims> RequestContext<T, C> {
     /// simulate metadata or a peer address.
     ///
     /// Available with the `test-util` feature.
+    ///
+    /// # Panics
+    ///
+    /// Never panics in practice. It panics only if
+    /// [`try_from_request`](Self::try_from_request) cannot find the claims this
+    /// function inserts into the request a moment earlier, which would be a bug
+    /// in this crate rather than in the caller's code.
     #[cfg(any(feature = "test-util", test))]
     pub fn for_test(claims: C, message: T) -> Self
     where

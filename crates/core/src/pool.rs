@@ -20,7 +20,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{LazyLock, RwLock},
+    sync::{LazyLock, PoisonError, RwLock},
     time::Duration,
 };
 
@@ -74,14 +74,14 @@ pub fn get_channel(endpoint: &str) -> Result<Channel, Error> {
 fn get_or_create_channel(endpoint: &str, pool: &ChannelMap) -> Result<Channel, Error> {
     if let Some(channel) = pool
         .read()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(PoisonError::into_inner)
         .get(endpoint)
         .cloned()
     {
         return Ok(channel);
     }
 
-    let mut lock = pool.write().unwrap_or_else(|e| e.into_inner());
+    let mut lock = pool.write().unwrap_or_else(PoisonError::into_inner);
     // Re-check after acquiring the write lock: another thread may have
     // inserted the channel between our read and write lock acquisitions.
     if let Some(channel) = lock.get(endpoint).cloned() {

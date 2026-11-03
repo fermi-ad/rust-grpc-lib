@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.10.1] — 2026-11-03
+
+### Changed
+
+- **`#[must_use]` on builder-style and result-returning methods**, each with an explanatory message: `build_support::Config::new` and its `*_attribute` methods, `GrpcServer::builder`, `GrpcServerBuilder::{timeout, add_service, dangerously_unauthenticated}`, `GrpcTraceLayer::new`, `RpcMethod::from_path`, `RpcSpan::span`, `testing::{capture_spans, claims_with_roles}`, and the `SpanCapture` and `SpanRecord` accessors. A caller that ignores the result now gets an `unused_must_use` warning; those calls were already no-ops because the methods consume `self`.
+- `testing::SpanCapture::spans` recovers from a poisoned lock instead of panicking, so one failing test no longer hides the spans another test asserts on.
+- `build_support` is compiled only with the `build` feature (or under test), no longer under `doc` alone. Build its docs with `cargo doc --features build`.
+- Internal cleanups for `clippy::pedantic` (`let ... else`, `writeln!` instead of `push_str(&format!(..))`, `PoisonError::into_inner` as a function path). No behavior change.
+- Reordered the items in `server.rs`. No behavior change.
+
+### Documentation
+
+- Added `# Errors` and `# Panics` sections to `extract_token`, `authenticate_with_config`, `serve`, `serve_with_shutdown`, `serve_on_listener`, `testing::call_rpc` and `RequestContext::for_test`.
+- Moved the per-module docs from `lib.rs` into each module's own header, which now names the enabling feature.
+- Fixed broken or redundant intra-doc links, including links to `build_support` and to `#[cfg(test)]` modules in `integration_tests`.
+- Gated the `build_support::Config` doctests on the `build` feature, and fixed the `enum_attribute` example, which discarded the returned `Config`.
+
+### Internal
+
+- `integration_tests` allows `clippy::unused_async_trait_impl` on macro-annotated impls (the macro requires native `async fn`) and `clippy::pedantic` on the generated proto fixtures.
+- Version bumps: `grpc-macro` 0.3.1, `integration_tests` 0.1.1.
+
+### Compatibility
+
+No API or runtime changes beyond the `#[must_use]` warnings and the `build_support` doc gating above.
+
+---
+
 ## [7.10.0] — 2026-11-02
 
 ### Added

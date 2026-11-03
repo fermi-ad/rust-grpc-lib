@@ -29,9 +29,10 @@ impl Env {
     /// last segment of the implemented trait, or the self type for an
     /// inherent `impl`.
     pub(super) fn new(args: MacroArgs, impl_block: &ItemImpl) -> Self {
-        let claims_ty = match args.claims {
-            Some(path) => quote! { #path },
-            None => quote! { ::rust_grpc_lib::auth::KeycloakClaims },
+        let claims_ty = if let Some(path) = args.claims {
+            quote! { #path }
+        } else {
+            quote! { ::rust_grpc_lib::auth::KeycloakClaims }
         };
         let service = service_name(impl_block);
 
@@ -42,15 +43,13 @@ impl Env {
 /// The name reported as `rpc.service`: the implemented trait's last path
 /// segment, or the self type's tokens when the block has no trait.
 fn service_name(impl_block: &ItemImpl) -> String {
-    match &impl_block.trait_ {
-        Some((_, path, _)) => path
-            .segments
+    if let Some((_, path, _)) = &impl_block.trait_ {
+        path.segments
             .last()
             .map(|seg| seg.ident.to_string())
-            .unwrap_or_default(),
-        None => {
-            let self_ty = &impl_block.self_ty;
-            quote! { #self_ty }.to_string()
-        }
+            .unwrap_or_default()
+    } else {
+        let self_ty = &impl_block.self_ty;
+        quote! { #self_ty }.to_string()
     }
 }
