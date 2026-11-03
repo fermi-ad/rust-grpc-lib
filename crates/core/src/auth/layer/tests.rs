@@ -46,7 +46,7 @@ fn name_of<S: NamedService>(_: &S) -> &'static str {
 }
 
 // -----------------------------------------------------------------------
-// Public constructor: new, clone
+// Public constructors: new, validator_into_interceptor, clone
 // -----------------------------------------------------------------------
 #[test]
 fn new_builds_a_working_interceptor() {

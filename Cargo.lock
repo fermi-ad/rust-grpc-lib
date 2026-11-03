@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "rust-grpc-lib"
-version = "7.9.0"
+version = "7.10.0"
 dependencies = [
  "grpc-macro",
  "http-body",
@@ -1367,6 +1367,7 @@ dependencies = [
  "rust-env-var-lib",
  "tokio",
  "tonic",
+ "tonic-health",
  "tonic-prost",
  "tonic-prost-build",
  "tower",

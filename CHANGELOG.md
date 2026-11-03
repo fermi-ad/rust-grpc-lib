@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.10.0] — 2026-11-02
+
+### Added
+
+- **`server` feature** (off by default; implies `auth`) enabling the new `rust_grpc_lib::server` module and adding `tonic-health` and `tokio` (`net` only) as optional dependencies.
+- **`server::GrpcServer::builder()`**, a typestate builder for the wiring each service otherwise repeats by hand:
+  - Choose how services are protected first: `authenticate(validator)`, `authenticate_with_claims::<C, _>(validator)`, `authenticate_with_config(KeyValidatorConfig)` (builds the `KeyValidator` and returns its error), or `dangerously_unauthenticated()` (needs the `unauthenticated` feature). `add_service` and the `serve*` methods do not exist until one is chosen, so a server with no authentication decision is a compile error.
+  - Every service added with `add_service` is wrapped with `wrap_service` (per-service auth). Health is added unwrapped, so probes need no token, and there is no way to add another open service.
+  - The health service is created for you: `""` and every added service are `Serving` at start and `NotServing` as soon as the shutdown future completes, before connections drain.
+  - `timeout(Duration)` sets tonic's response timeout.
+  - With the `trace` feature the builder installs `GrpcTraceLayer` first, so it is outermost and sees auth rejections and health probes.
+  - `serve(addr)`, `serve_with_shutdown(addr, signal)` and `serve_on_listener(listener, signal)` (bind port `0` first to get an OS-assigned port, for tests). They return `ServeError`: `Bind` for an unavailable address, `Transport` for a failure while serving.
+- **`server::GrpcService`**, the bound a generated `FooServer<T>` satisfies, so signatures that accept a service can be written without naming `axum`.
+
+### Compatibility
+
+Additive. Nothing changes for a consumer that does not enable `server`. Hand-wired `Server::builder()` setups keep working.
+
+---
+
 ## [7.9.0] — 2026-10-30
 
 ### Added
