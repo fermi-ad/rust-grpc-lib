@@ -6,7 +6,7 @@
 //!
 //! - **Per-service authentication.** Every service added with
 //!   [`add_service`](GrpcServerBuilder::add_service) is wrapped with
-//!   [`wrap_service`](crate::auth::wrap_service), so a missing or invalid token
+//!   [`wrap_service`], so a missing or invalid token
 //!   is rejected with `Unauthenticated` before any handler runs.
 //! - **An open health service.** `grpc.health.v1.Health` is added *unwrapped*, so
 //!   probes work without a token. The overall service (`""`) and each added
@@ -76,8 +76,8 @@ use tonic::codegen::Service;
 use tonic::codegen::http::{Request, Response};
 use tonic::server::NamedService;
 use tonic::service::Routes;
-use tonic::transport::Server;
 use tonic::transport::server::TcpIncoming;
+use tonic::transport::{Error as TransportError, Server};
 use tonic_health::ServingStatus;
 use tonic_health::server::{HealthReporter, health_reporter};
 
@@ -88,31 +88,11 @@ use crate::auth::{
 #[cfg(feature = "trace")]
 use crate::trace::GrpcTraceLayer;
 
-#[cfg(test)]
-mod tests;
-
 mod sealed {
     pub trait Sealed {}
 }
-
-/// Entry point of the server builder. See the [module docs](self).
-#[derive(Debug, Clone, Copy)]
-pub struct GrpcServer;
-
-impl GrpcServer {
-    /// Start building a server. Choose an authentication mode next; see the
-    /// [module docs](self).
-    pub fn builder() -> GrpcServerBuilder<AuthUnset> {
-        let (reporter, health_service) = health_reporter();
-        GrpcServerBuilder {
-            auth: AuthUnset,
-            timeout: None,
-            routes: Routes::new(health_service),
-            health: reporter,
-            served: Vec::new(),
-        }
-    }
-}
+#[cfg(test)]
+mod tests;
 
 /// A tonic service that the builder can serve: what a generated `FooServer<T>`
 /// is.
@@ -156,33 +136,24 @@ pub trait AuthMode: sealed::Sealed {
     fn register<S: GrpcService>(&self, routes: Routes, service: S) -> Routes;
 }
 
-/// Builder state: no authentication mode chosen yet.
+/// Entry point of the server builder. See the [module docs](self).
 #[derive(Debug, Clone, Copy)]
-pub struct AuthUnset;
+pub struct GrpcServer;
 
-/// Builder state: every added service requires a valid token.
-pub struct Authenticated<C, V> {
-    validator: Arc<V>,
-    _claims: PhantomData<fn() -> C>,
-}
-
-/// Builder state: services are added without any authentication.
-///
-/// Only reachable through `dangerously_unauthenticated`, behind the
-/// `unauthenticated` feature.
-#[cfg(feature = "unauthenticated")]
-#[derive(Debug, Clone, Copy)]
-pub struct Unauthenticated;
-
-/// The error returned when the server fails to start or stops abnormally.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum ServeError {
-    /// The listen address could not be bound, for example because the port is
-    /// already in use.
-    Bind(io::Error),
-    /// tonic's transport failed while serving.
-    Transport(tonic::transport::Error),
+impl GrpcServer {
+    /// Start building a server. Choose an authentication mode next; see the
+    /// [module docs](self).
+    #[must_use = "a builder does nothing until an authentication mode is chosen and `serve*` is called"]
+    pub fn builder() -> GrpcServerBuilder<AuthUnset> {
+        let (reporter, health_service) = health_reporter();
+        GrpcServerBuilder {
+            auth: AuthUnset,
+            timeout: None,
+            routes: Routes::new(health_service),
+            health: reporter,
+            served: Vec::new(),
+        }
+    }
 }
 
 /// Builds a gRPC server; see the [module docs](self).
@@ -198,12 +169,15 @@ pub struct GrpcServerBuilder<A> {
     served: Vec<&'static str>,
 }
 
+// The builder is a typestate: each `impl` below applies to a different set of
+// states, so they cannot be merged into one inherent block.
 impl<A> GrpcServerBuilder<A> {
     /// Fail any RPC that takes longer than `timeout` to produce a response.
     ///
     /// This is tonic's `Server::timeout`: the handler future is dropped at the
     /// deadline and the client receives `Cancelled`. A shorter `grpc-timeout`
     /// header from the client still takes precedence.
+    #[must_use = "this consumes the builder and returns an updated one; the timeout is lost if the result is dropped"]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
@@ -242,6 +216,12 @@ impl GrpcServerBuilder<AuthUnset> {
     /// Build a [`KeyValidator`] from `config` and authenticate every service
     /// with it. Fails if the config is invalid (an unreadable key file, for
     /// example), so a misconfigured server never starts.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AuthError`] from [`KeyValidator::new`] when `config`
+    /// cannot be turned into a validator, for example because a key file is
+    /// unreadable or its contents are invalid.
     pub fn authenticate_with_config(
         self,
         config: KeyValidatorConfig,
@@ -255,6 +235,7 @@ impl GrpcServerBuilder<AuthUnset> {
     /// For test harnesses only. Requires the `unauthenticated` feature, which
     /// should not be enabled in a production build.
     #[cfg(feature = "unauthenticated")]
+    #[must_use = "this consumes the builder and returns the unauthenticated one; dropping it discards the whole server"]
     pub fn dangerously_unauthenticated(self) -> GrpcServerBuilder<Unauthenticated> {
         self.with_auth(Unauthenticated)
     }
@@ -274,6 +255,7 @@ impl<A: AuthMode> GrpcServerBuilder<A> {
     /// Add a generated server (`FooServer::new(my_impl)`), protected as the
     /// chosen authentication mode requires, and report it in the health
     /// service.
+    #[must_use = "this consumes the builder and returns an updated one; the service is lost if the result is dropped"]
     pub fn add_service<S: GrpcService>(mut self, service: S) -> Self {
         self.routes = self.auth.register(self.routes, service);
         self.served.push(S::NAME);
@@ -283,6 +265,12 @@ impl<A: AuthMode> GrpcServerBuilder<A> {
     /// Serve on `addr` until the server fails. See
     /// [`serve_with_shutdown`](Self::serve_with_shutdown) for graceful
     /// shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServeError::Bind`] if `addr` cannot be bound, for example
+    /// because the port is already in use, and [`ServeError::Transport`] if
+    /// tonic's transport fails while serving.
     pub async fn serve(self, addr: SocketAddr) -> Result<(), ServeError> {
         self.serve_with_shutdown(addr, pending()).await
     }
@@ -292,6 +280,13 @@ impl<A: AuthMode> GrpcServerBuilder<A> {
     /// Health is switched to `NotServing` first, so load balancers stop
     /// sending traffic while in-flight RPCs finish. Pass a cancellation
     /// token's `cancelled()` future, `ctrl_c()`, or similar.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServeError::Bind`] if `addr` cannot be bound, for example
+    /// because the port is already in use, and [`ServeError::Transport`] if
+    /// tonic's transport fails while serving. A completed graceful shutdown
+    /// returns `Ok(())`.
     pub async fn serve_with_shutdown(
         self,
         addr: SocketAddr,
@@ -306,6 +301,12 @@ impl<A: AuthMode> GrpcServerBuilder<A> {
     ///
     /// Bind to port `0` and read `local_addr()` first to get an OS-assigned
     /// port, which is what tests want.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ServeError::Transport`] if tonic's transport fails while
+    /// serving. There is no bind step, so [`ServeError::Bind`] is never
+    /// returned. A completed graceful shutdown returns `Ok(())`.
     pub async fn serve_on_listener(
         self,
         listener: TcpListener,
@@ -351,7 +352,15 @@ impl<A: AuthMode> GrpcServerBuilder<A> {
     }
 }
 
-impl<C, V> sealed::Sealed for Authenticated<C, V> {}
+/// Builder state: no authentication mode chosen yet.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthUnset;
+
+/// Builder state: every added service requires a valid token.
+pub struct Authenticated<C, V> {
+    validator: Arc<V>,
+    _claims: PhantomData<fn() -> C>,
+}
 
 impl<C, V> AuthMode for Authenticated<C, V>
 where
@@ -366,13 +375,40 @@ where
     }
 }
 
+impl<C, V> sealed::Sealed for Authenticated<C, V> {}
+
+/// Builder state: services are added without any authentication.
+///
+/// Only reachable through `dangerously_unauthenticated`, behind the
+/// `unauthenticated` feature.
 #[cfg(feature = "unauthenticated")]
-impl sealed::Sealed for Unauthenticated {}
+#[derive(Debug, Clone, Copy)]
+pub struct Unauthenticated;
 
 #[cfg(feature = "unauthenticated")]
 impl AuthMode for Unauthenticated {
     fn register<S: GrpcService>(&self, routes: Routes, service: S) -> Routes {
         routes.add_service(service)
+    }
+}
+
+#[cfg(feature = "unauthenticated")]
+impl sealed::Sealed for Unauthenticated {}
+
+/// The error returned when the server fails to start or stops abnormally.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ServeError {
+    /// The listen address could not be bound, for example because the port is
+    /// already in use.
+    Bind(io::Error),
+    /// tonic's transport failed while serving.
+    Transport(TransportError),
+}
+
+impl From<TransportError> for ServeError {
+    fn from(source: TransportError) -> Self {
+        Self::Transport(source)
     }
 }
 
@@ -391,12 +427,6 @@ impl Error for ServeError {
             Self::Bind(source) => Some(source),
             Self::Transport(source) => Some(source),
         }
-    }
-}
-
-impl From<tonic::transport::Error> for ServeError {
-    fn from(source: tonic::transport::Error) -> Self {
-        Self::Transport(source)
     }
 }
 

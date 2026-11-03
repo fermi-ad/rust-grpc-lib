@@ -5,6 +5,7 @@
 //! delegates to [`ProtoRsGenerator`].
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write;
 
 #[cfg(test)]
 mod tests;
@@ -159,11 +160,11 @@ impl ProtoRsGenerator {
         mod_name: &str,
         this_pkg: &str,
     ) {
-        out.push_str(&format!("{indent}pub mod {mod_name} {{\n"));
+        writeln!(out, "{indent}pub mod {mod_name} {{").expect("writing to a String cannot fail");
         for (child_seg, child_node) in &node.children {
             self.emit_node(out, child_seg, child_node, depth + 1, this_pkg);
         }
-        out.push_str(&format!("{indent}}}\n"));
+        writeln!(out, "{indent}}}").expect("writing to a String cannot fail");
     }
 
     fn emit_leaf(&self, out: &mut String, indent: &str, mod_name: &str, pkg: &str) {
@@ -171,20 +172,21 @@ impl ProtoRsGenerator {
         let m = self.meta.get(pkg).unwrap_or(&default);
 
         for line in &m.doc {
-            out.push_str(&format!("{indent}{line}\n"));
+            writeln!(out, "{indent}{line}").expect("writing to a String cannot fail");
         }
         for attr in &m.outer_attrs {
-            out.push_str(&format!("{indent}{attr}\n"));
+            writeln!(out, "{indent}{attr}").expect("writing to a String cannot fail");
         }
-        out.push_str(&format!("{indent}pub mod {mod_name} {{\n"));
+        writeln!(out, "{indent}pub mod {mod_name} {{").expect("writing to a String cannot fail");
         for attr in &m.inner_attrs {
-            out.push_str(&format!("{indent}    {attr}\n"));
+            writeln!(out, "{indent}    {attr}").expect("writing to a String cannot fail");
         }
 
         // Now add guards so the included files don't get flagged by the linter.
         // Consumers will not have a way to fix linting errors in the generated code.
-        out.push_str(&format!("{indent}    #![allow(clippy::all)]\n"));
-        out.push_str(&format!("{indent}    #![allow(unused)]\n"));
+        writeln!(out, "{indent}    #![allow(clippy::all)]")
+            .expect("writing to a String cannot fail");
+        writeln!(out, "{indent}    #![allow(unused)]").expect("writing to a String cannot fail");
         // Prost escapes reserved keywords in generated filenames (e.g. `type` → `r#type`),
         // so the include_proto! argument must use the same escaping.
         let include_arg: String = pkg
@@ -192,10 +194,9 @@ impl ProtoRsGenerator {
             .map(segment_to_mod_name)
             .collect::<Vec<_>>()
             .join(".");
-        out.push_str(&format!(
-            "{indent}    tonic::include_proto!(\"{include_arg}\");\n"
-        ));
-        out.push_str(&format!("{indent}}}\n"));
+        writeln!(out, "{indent}    tonic::include_proto!(\"{include_arg}\");")
+            .expect("writing to a String cannot fail");
+        writeln!(out, "{indent}}}").expect("writing to a String cannot fail");
     }
 }
 
@@ -215,7 +216,7 @@ fn write_header(out: &mut String, packages: &[String]) {
     out.push_str("//\n");
     out.push_str("// Generated types from interface-definitions:\n");
     for package in packages {
-        out.push_str(&format!("// * {package}\n"));
+        writeln!(out, "// * {package}").expect("writing to a String cannot fail");
     }
     out.push('\n');
 }

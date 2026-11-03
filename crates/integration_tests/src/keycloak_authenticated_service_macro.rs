@@ -41,6 +41,9 @@ struct EchoServer;
 //   2. Returns `Status::internal` if the claims are absent.
 //   3. Returns `Status::permission_denied` if the `"admin"` role is absent.
 //   4. Falls through to the original body otherwise.
+// The `async fn` signature is required: the macro only recognizes native
+// async methods, so the handlers cannot be rewritten to return `ready(..)`.
+#[allow(clippy::unused_async_trait_impl)]
 #[keycloak_authenticated_service]
 impl EchoService for EchoServer {
     #[roles(any("admin"))]
@@ -54,6 +57,8 @@ impl EchoService for EchoServer {
 /// Concrete server type that the `all(...)` variant of the macro is applied to.
 struct MultiRoleServer;
 
+// Same as `EchoServer`: the macro requires native `async fn` signatures.
+#[allow(clippy::unused_async_trait_impl)]
 #[keycloak_authenticated_service]
 impl EchoService for MultiRoleServer {
     #[roles(all("admin", "operator"))]

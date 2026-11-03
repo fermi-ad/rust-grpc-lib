@@ -1,7 +1,10 @@
-//! Re-exports from `rust-auth-lib` plus the two gRPC-specific sub-modules.
+//! JWT interceptors, validation layer, and re-exports from `rust-auth-lib`,
+//! plus the gRPC-specific sub-modules.
 //!
 //! Everything a consumer needs for JWT auth lives here; a direct dependency on
 //! `rust-auth-lib` is not required.
+//!
+//! Enabled by the `auth` feature (on by default).
 //!
 //! # Sub-modules
 //!
@@ -70,6 +73,12 @@ pub use interceptor::ClientJwtInterceptor;
 pub use layer::{JwtValidationLayer, JwtValidationService, validator_into_layer, wrap_service};
 
 /// Construct from the metadata of an incoming tonic request.
+///
+/// # Errors
+///
+/// Returns [`TokenError::EmptyAccessToken`] when the request has no usable
+/// bearer token: the `authorization` header is absent, is not valid ASCII, or
+/// does not start with `Bearer `.
 pub fn extract_token<T>(request: &Request<T>) -> Result<ForwardedToken, TokenError> {
     request
         .metadata()

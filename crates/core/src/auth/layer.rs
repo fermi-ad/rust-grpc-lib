@@ -174,13 +174,10 @@ impl<C: Claims + Clone, V: TokenValidator + Send + Sync + 'static> Interceptor
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.strip_prefix("Bearer "))
-            .map(|s| s.to_owned());
+            .map(str::to_owned);
 
-        let token = match token {
-            Some(t) => t,
-            None => {
-                return Err(Status::unauthenticated("missing Authorization header"));
-            }
+        let Some(token) = token else {
+            return Err(Status::unauthenticated("missing Authorization header"));
         };
 
         // The Interceptor trait is synchronous, and `TokenValidator::validate`

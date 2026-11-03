@@ -104,6 +104,17 @@ pub async fn assert_all_rpcs_require_role(
 /// `token` becomes an `Authorization: Bearer` header when `Some`. Returns the
 /// status the server answered with, or `Ok(())` if the call succeeded. This is
 /// the primitive behind the `assert_*` helpers, exposed for custom checks.
+///
+/// # Errors
+///
+/// Returns the [`Status`] the call failed with:
+///
+/// - `InvalidArgument` if `rpc_path` is not a valid URI path or `token` cannot
+///   be sent as a header value. In both cases no request is made.
+/// - A status derived from the transport error if the channel never becomes
+///   ready.
+/// - Whatever status the server answered with, for example
+///   `Unauthenticated` or `PermissionDenied`.
 pub async fn call_rpc(channel: Channel, rpc_path: &str, token: Option<&str>) -> Result<(), Status> {
     let path = PathAndQuery::from_str(rpc_path)
         .map_err(|e| Status::invalid_argument(format!("bad RPC path {rpc_path:?}: {e}")))?;

@@ -35,6 +35,7 @@ impl RpcMethod {
     ///
     /// Returns `None` when the path does not have exactly those two non-empty
     /// segments.
+    #[must_use = "the parsed method is returned, not stored anywhere; ignoring it discards the parse result"]
     pub fn from_path(path: &str) -> Option<Self> {
         let (service, method) = path.strip_prefix('/')?.split_once('/')?;
         if service.is_empty() || method.is_empty() || method.contains('/') {
@@ -98,6 +99,7 @@ impl RpcSpan {
     }
 
     /// The span that covers the RPC.
+    #[must_use = "this only borrows the span; use it to enter, record onto, or parent another span"]
     pub fn span(&self) -> &Span {
         &self.0
     }

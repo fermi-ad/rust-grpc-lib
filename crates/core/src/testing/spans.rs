@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tracing::Subscriber;
 use tracing::field::{Field, Visit};
@@ -43,10 +43,15 @@ pub struct SpanRecord {
 
 impl SpanCapture {
     /// The spans with the given name, oldest first.
+    ///
+    /// A poisoned lock (another test thread panicked while recording a span)
+    /// is recovered rather than propagated, so one failing test does not hide
+    /// the spans another test wants to assert on.
+    #[must_use = "this returns a snapshot of the captured spans; it has no effect unless you inspect it"]
     pub fn spans(&self, name: &str) -> Vec<SpanRecord> {
         self.0
             .lock()
-            .unwrap()
+            .unwrap_or_else(PoisonError::into_inner)
             .spans
             .iter()
             .filter(|span| span.name == name)
@@ -55,6 +60,7 @@ impl SpanCapture {
     }
 
     /// The recorded value of `field` on the first span called `span_name`.
+    #[must_use = "this only looks up a recorded value; it has no effect unless you inspect it"]
     pub fn field(&self, span_name: &str, field: &str) -> Option<String> {
         self.spans(span_name)
             .first()
@@ -89,6 +95,7 @@ impl<S: Subscriber> Layer<S> for SpanCapture {
 
 impl SpanRecord {
     /// The span's name, for example `rpc`.
+    #[must_use = "this only reads the span name; it has no effect unless you inspect it"]
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -100,6 +107,7 @@ impl SpanRecord {
     }
 
     /// Whether `field` has a recorded value.
+    #[must_use = "this only reports whether the field was recorded; assert on the result"]
     pub fn has_field(&self, field: &str) -> bool {
         self.fields.contains_key(field)
     }
@@ -109,6 +117,7 @@ impl SpanRecord {
 ///
 /// Spans are captured until the returned guard is dropped, so keep it alive
 /// for the whole test.
+#[must_use = "dropping the guard immediately stops span capture, and the capture is useless unless you read it"]
 pub fn capture_spans() -> (SpanCapture, DefaultGuard) {
     let capture = SpanCapture::default();
     let subscriber = tracing_subscriber::registry().with(capture.clone());

@@ -6,18 +6,21 @@
 //!
 //! # Test modules
 //!
-//! - [`keycloak_authenticated_service_macro`] — unit-level tests for the `#[keycloak_authenticated_service]` macro
+//! The modules are `#[cfg(test)]`, so they are named in backticks rather than
+//! linked: rustdoc cannot resolve links to them.
+//!
+//! - `keycloak_authenticated_service_macro` — unit-level tests for the `#[keycloak_authenticated_service]` macro
 //!   expansion (role checks, missing claims, `any`/`all` variants).
-//! - [`per_service_auth`] — per-service JWT auth via `wrap_service` and
+//! - `per_service_auth` — per-service JWT auth via `wrap_service` and
 //!   `with_interceptor`, with an unauthenticated health service alongside.
-//! - [`integration_round_trip`] — full client→server gRPC round-trip tests
+//! - `integration_round_trip` — full client→server gRPC round-trip tests
 //!   using a real tonic server on a loopback port with `JwtValidationLayer`.
-//! - [`trace_layer`] — `GrpcTraceLayer` spans, extensions and timeout handling
+//! - `trace_layer` — `GrpcTraceLayer` spans, extensions and timeout handling
 //!   on a live server, captured with a `tracing` layer.
-//! - [`server_builder`] — `GrpcServer::builder` on a live server: health,
+//! - `server_builder` — `GrpcServer::builder` on a live server: health,
 //!   per-service auth, timeout, tracing, shutdown and the unauthenticated
 //!   opt-out.
-//! - [`support`] — token, validator and span-capture helpers shared by the
+//! - `support` — token, validator and span-capture helpers shared by the
 //!   live-server tests.
 //!
 //! # Proto fixtures
@@ -54,7 +57,7 @@ mod trace_layer;
 #[cfg(test)]
 pub mod google {
     pub mod protobuf {
-        #![allow(clippy::all)]
+        #![allow(clippy::all, clippy::pedantic)]
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/src/fixtures/google.protobuf.rs"
@@ -65,7 +68,7 @@ pub mod google {
 #[cfg(test)]
 pub mod services {
     pub mod example {
-        #![allow(clippy::all)]
+        #![allow(clippy::all, clippy::pedantic)]
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/src/fixtures/services.example.rs"
