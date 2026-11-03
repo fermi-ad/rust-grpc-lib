@@ -136,10 +136,7 @@ impl<T, C: Claims> RequestContext<T, C> {
     }
 
     /// The token subject (`sub` claim).
-    pub fn sub(&self) -> &str
-    where
-        C: Claims,
-    {
+    pub fn sub(&self) -> &str {
         self.claims.sub()
     }
 
@@ -147,10 +144,7 @@ impl<T, C: Claims> RequestContext<T, C> {
     ///
     /// Long-lived stream handlers can compare this with the current time to
     /// decide when to end the stream.
-    pub fn exp_unix(&self) -> u64
-    where
-        C: Claims,
-    {
+    pub fn exp_unix(&self) -> u64 {
         self.claims.exp_unix()
     }
 
