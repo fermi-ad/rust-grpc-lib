@@ -427,7 +427,8 @@ Marker attribute consumed by `#[keycloak_authenticated_service]`. Two variants:
 
 | Feature | Default | Description |
 |---|---|---|
-| `auth` | ✅ on | Enables JWT auth; generated clients gain `from_endpoint_with_provider` |
+| `auth` | ✅ on | Enables JWT auth; generated clients gain `from_endpoint_with_provider`. Also enables `tracing` |
+| `tracing` | ✅ on (via `auth`) | Adds the `tracing` dependency; misconfiguration detail from `RequestContext` is logged server-side |
 | `jwks-url` | off | Enables JWKS key retrieval and rotation from a URL via `KeyValidatorConfig::from_jwks_url` (opt-in; pulls in an HTTP client) |
 | `unauthenticated` | off | Enables `from_endpoint` (no-auth constructor) on generated clients; for test harnesses only |
 | `build` | off | Enables proto code-generation helpers (`build_support` module) |
