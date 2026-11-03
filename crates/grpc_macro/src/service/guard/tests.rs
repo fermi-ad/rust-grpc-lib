@@ -2,15 +2,19 @@
 
 use super::*;
 use crate::service::args::MacroArgs;
+use crate::service::roles::RoleItem;
 
-fn guard_tokens(param: &RequestParam) -> String {
+fn env() -> Env {
     let args: MacroArgs = syn::parse2(quote! {}).unwrap();
     let impl_block: syn::ItemImpl = syn::parse_quote! { impl Echo for Server {} };
-    let env = Env::new(args, &impl_block);
-    let spec = RolesSpec::Any(vec!["admin".to_string()]);
+    Env::new(args, &impl_block)
+}
+
+fn guard_tokens(param: &RequestParam) -> String {
+    let spec = RolesSpec::Any(vec![RoleItem::Literal(syn::parse_quote!("admin"))]);
     let method = Ident::new("echo", Span::call_site());
 
-    build_guard(&env, param, &spec, &method).to_string()
+    build_guard(&env(), param, &spec, &method).to_string()
 }
 
 fn request_param() -> RequestParam {
@@ -67,4 +71,35 @@ fn context_guard_has_no_missing_claims_path() {
     let tokens = guard_tokens(&context_param());
 
     assert!(!tokens.contains("claims_type"), "{tokens}");
+}
+
+#[test]
+fn typed_roles_are_emitted_as_paths() {
+    let spec = RolesSpec::All(vec![
+        RoleItem::Path(syn::parse_quote!(roles::OPERATOR)),
+        RoleItem::Literal(syn::parse_quote!("admin")),
+    ]);
+    let method = Ident::new("echo", Span::call_site());
+
+    let tokens = build_guard(&env(), &request_param(), &spec, &method).to_string();
+
+    assert!(tokens.contains("roles :: OPERATOR"), "{tokens}");
+    assert!(tokens.contains("\"admin\""), "{tokens}");
+}
+
+#[test]
+fn authenticated_guard_on_a_request_fails_closed_without_a_role_check() {
+    let tokens = build_authenticated_guard(&env(), &request_param()).to_string();
+
+    assert!(
+        tokens.contains("authentication is not configured"),
+        "{tokens}"
+    );
+    assert!(!tokens.contains("permission_denied"), "{tokens}");
+    assert!(!tokens.contains("has_role"), "{tokens}");
+}
+
+#[test]
+fn authenticated_guard_on_a_context_is_empty() {
+    assert!(build_authenticated_guard(&env(), &context_param()).is_empty());
 }

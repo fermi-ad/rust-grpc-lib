@@ -1,5 +1,5 @@
-error: unknown argument `strict`; expected `claims = <path>`
+error: unknown argument `lenient`; expected `claims = <path>` or `strict`
   --> src/compile_fail_cases/unknown_argument.rs:13:34
    |
-13 | #[keycloak_authenticated_service(strict)]
-   |                                  ^^^^^^
+13 | #[keycloak_authenticated_service(lenient)]
+   |                                  ^^^^^^^

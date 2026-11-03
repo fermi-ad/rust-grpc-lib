@@ -1,0 +1,15 @@
+error: `#[roles]` has no effect here: it must be written on a method (`fn`) inside an `impl` block annotated with `#[keycloak_authenticated_service]`, which must be written above `#[async_trait]`
+  --> src/compile_fail_cases/policy_outside_service.rs:10:5
+   |
+10 |     #[roles(any("admin"))]
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `roles` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: `#[any_authenticated]` has no effect here: it must be written on a method (`fn`) inside an `impl` block annotated with `#[keycloak_authenticated_service]`, which must be written above `#[async_trait]`
+  --> src/compile_fail_cases/policy_outside_service.rs:15:5
+   |
+15 |     #[any_authenticated]
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `any_authenticated` (in Nightly builds, run with -Z macro-backtrace for more info)

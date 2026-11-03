@@ -10,7 +10,7 @@ trait Echo {
 
 struct Server;
 
-#[keycloak_authenticated_service(strict)]
+#[keycloak_authenticated_service(lenient)]
 impl Echo for Server {
     async fn echo(&self, request: Request<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(request.into_inner()))

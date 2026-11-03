@@ -1,6 +1,6 @@
 //! Procedural macros for `rust-grpc-lib`.
 //!
-//! This crate exposes four public macros:
+//! This crate exposes these public macros:
 //!
 //! - [`GrpcClient`] — derive macro that generates
 //!   `from_endpoint_with_provider` on a tonic client struct, wiring it into
@@ -9,11 +9,14 @@
 //!   auth) on a tonic client struct. For test harnesses only; requires the
 //!   `unauthenticated` feature on `rust-grpc-lib`.
 //! - [`keycloak_authenticated_service`] — attribute macro applied to an `impl Trait for Type`
-//!   block that injects Keycloak role-checking guards into methods annotated
-//!   with `#[roles(...)]` and lets handlers take a `RequestContext<T>` instead
-//!   of a `tonic::Request<T>`.
-//! - [`roles`] — marker attribute consumed by [`keycloak_authenticated_service`]. A pass-through
-//!   no-op when used without `#[keycloak_authenticated_service]` on the enclosing `impl` block.
+//!   block that injects access guards into methods annotated with an access
+//!   policy and lets handlers take a `RequestContext<T>` instead of a
+//!   `tonic::Request<T>`. Its `strict` argument requires every method to
+//!   declare a policy.
+//! - [`roles`] and [`any_authenticated`] — the access policies consumed by
+//!   [`keycloak_authenticated_service`]. Each one is a compile error when it
+//!   is still present after expansion, that is, when it was written outside
+//!   an `impl` block annotated with `#[keycloak_authenticated_service]`.
 //!
 //! # Layout
 //!
@@ -24,7 +27,7 @@
 //! | Module | Expands |
 //! |---|---|
 //! | `client` | `GrpcClient` and `GrpcNoAuthClient` |
-//! | `service` | `keycloak_authenticated_service`, split into one submodule per concern (arguments, environment, `#[async_trait]` order check, request-parameter rewrite, `#[roles]` parsing, guard emission) |
+//! | `service` | `keycloak_authenticated_service`, split into one submodule per concern (arguments, environment, `#[async_trait]` order check, request-parameter rewrite, access-policy parsing, `#[roles]` argument parsing, guard emission) |
 //!
 //! # Dependencies of the consumer
 //!
@@ -48,6 +51,8 @@
 
 use proc_macro::TokenStream;
 
+use service::Kind as PolicyKind;
+
 mod client;
 mod service;
 
@@ -61,12 +66,16 @@ pub fn grpc_no_auth_client_derive(input: TokenStream) -> TokenStream {
     into_token_stream(client::expand_grpc_no_auth_client(input.into()))
 }
 
-/// Marker attribute consumed by [`keycloak_authenticated_service`].
+/// Access policy: the caller must hold the listed roles.
 ///
-/// When used standalone (without `#[keycloak_authenticated_service]` on the enclosing `impl`
-/// block) this attribute is a pass-through no-op so that the code still
-/// compiles. `#[keycloak_authenticated_service]` strips and processes it before emitting the
-/// final `impl` block.
+/// Consumed by [`keycloak_authenticated_service`], which strips it before
+/// emitting the final `impl` block. If it is still there when this macro runs,
+/// the attribute is not on a method of an `impl` block annotated with
+/// `#[keycloak_authenticated_service]` (the block is not annotated, or the
+/// attribute sits on some other item), so no check would be generated; that is
+/// reported as a compile error rather than silently skipping the check.
+///
+/// Each role is a string literal or a path to a `&str` constant.
 ///
 /// # Usage
 ///
@@ -79,17 +88,33 @@ pub fn grpc_no_auth_client_derive(input: TokenStream) -> TokenStream {
 ///     {
 ///         // ...
 ///     }
+///
+///     #[roles(all(roles::OPERATOR, roles::ADMIN))]
+///     async fn reset(&self, request: Request<ResetRequest>)
+///         -> Result<Response<ResetResponse>, Status>
+///     {
+///         // ...
+///     }
 /// }
 /// ```
 #[proc_macro_attribute]
 pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Pass-through; keycloak_authenticated_service strips and processes this attribute.
-    item
+    unstripped(PolicyKind::Roles, item)
+}
+
+/// Access policy: any caller with valid claims is allowed, no role is needed.
+///
+/// Consumed by [`keycloak_authenticated_service`]; see [`roles`] for the
+/// error it produces when used outside such a block. The claims must still be
+/// present, so a missing JWT layer fails closed.
+#[proc_macro_attribute]
+pub fn any_authenticated(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    unstripped(PolicyKind::AnyAuthenticated, item)
 }
 
 /// Attribute macro applied to an `impl Trait for Type` block. It injects
-/// Keycloak role-checking guards into methods annotated with `#[roles(...)]`
-/// and rewrites `RequestContext<T>` parameters.
+/// access guards into methods annotated with an access policy and rewrites
+/// `RequestContext<T>` parameters.
 ///
 /// # Placement
 ///
@@ -103,14 +128,20 @@ pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// impl MyService for MyServer { /* ... */ }
 /// ```
 ///
-/// # Role check variants
+/// # Access policies
 ///
 /// - `#[roles(any("r1", "r2"))]` — at least one of the listed roles must be
 ///   present in the JWT claims.
 /// - `#[roles(all("r1", "r2"))]` — every listed role must be present.
-/// - No `#[roles(...)]` attribute — the method gets no role check (a valid JWT
-///   is still required by the JWT validation layer, but no role check is
-///   injected by this macro).
+/// - `#[any_authenticated]` — any caller with valid claims; no role is
+///   needed. The guard fails closed if the claims are missing.
+/// - No policy attribute — the macro injects no check, unless the block is
+///   `strict`. A valid JWT is still required by the JWT validation layer for
+///   every method, with or without a policy.
+///
+/// A method declares at most one policy. In a `roles` list each role is a
+/// string literal or a path to a `&str` constant, such as `roles::OPERATOR`;
+/// anything else is a compile error.
 ///
 /// # Handler parameter forms
 ///
@@ -128,11 +159,22 @@ pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// # Arguments
 ///
-/// `#[keycloak_authenticated_service(claims = SomeClaims)]` selects the claims
-/// type that `Request<T>` methods read from the extensions. It defaults to
-/// `rust_grpc_lib::auth::KeycloakClaims`. `SomeClaims` must implement
-/// `Claims` and provide `has_role(&self, &str) -> bool`. Methods taking
-/// `RequestContext<T, C>` use the `C` written in the signature.
+/// Arguments are separated by commas and may come in any order.
+///
+/// - `claims = SomeClaims` selects the claims type that `Request<T>` methods
+///   read from the extensions. It defaults to
+///   `rust_grpc_lib::auth::KeycloakClaims`. `SomeClaims` must implement
+///   `Claims` and provide `has_role(&self, &str) -> bool`. Methods taking
+///   `RequestContext<T, C>` use the `C` written in the signature.
+/// - `strict` requires every method of the block to declare `#[roles(..)]` or
+///   `#[any_authenticated]`. A method without one is a compile error that
+///   names it, so a method cannot lose its check by omission. The
+///   `#[async_trait]` order check applies with or without `strict`.
+///
+///   `strict` is meant for an `impl` of a service trait whose methods are all
+///   RPC handlers. It applies to every method of the block, so a helper method
+///   needs a policy too, and a policy requires the method to take a request
+///   parameter; move helpers to a separate `impl` block.
 ///
 /// # Denied calls
 ///
@@ -171,4 +213,14 @@ pub fn keycloak_authenticated_service(attr: TokenStream, item: TokenStream) -> T
 /// `compile_error!` at the span it carries.
 fn into_token_stream(result: syn::Result<proc_macro2::TokenStream>) -> TokenStream {
     result.unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
+/// The output of a policy attribute that reached its own expansion, which
+/// means `#[keycloak_authenticated_service]` did not strip it: a
+/// `compile_error!` followed by the item unchanged, so the user sees only this
+/// error rather than a cascade.
+fn unstripped(kind: PolicyKind, item: TokenStream) -> TokenStream {
+    let mut output = TokenStream::from(kind.unstripped_error().into_compile_error());
+    output.extend(item);
+    output
 }

@@ -1,26 +1,32 @@
-//! Parsing of the `#[roles(...)]` marker attribute.
+//! Parsing of the argument of `#[roles(...)]`.
 //!
-//! Two forms are accepted: `any("r1", "r2")` (at least one role must be held)
-//! and `all("r1", "r2")` (every role must be held). The attribute is stripped
-//! from the method here so it never reaches the compiler.
+//! Two forms are accepted: `any(r1, r2)` (at least one role must be held) and
+//! `all(r1, r2)` (every role must be held). Each role is either a string
+//! literal (`"operator"`) or a path to a `&str` constant (`roles::OPERATOR`),
+//! so a consumer can keep its role names in one module.
+//!
+//! Locating and stripping the attribute itself is the job of `policy`.
 
-use std::mem::take;
-
+use proc_macro2::TokenStream as TokenStream2;
+use quote::ToTokens;
 use syn::{
-    Attribute, Ident, LitStr, Meta, Token,
+    Error, Ident, LitStr, Path, Token, parenthesized,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
 };
 
-/// The parsed content of a `#[roles(...)]` attribute.
+#[cfg(test)]
+mod tests;
+
+/// The parsed argument of a `#[roles(...)]` attribute.
 pub(super) enum RolesSpec {
-    Any(Vec<String>),
-    All(Vec<String>),
+    Any(Vec<RoleItem>),
+    All(Vec<RoleItem>),
 }
 
 impl RolesSpec {
     /// The roles the endpoint requires.
-    pub(super) fn roles(&self) -> &[String] {
+    pub(super) fn roles(&self) -> &[RoleItem] {
         match self {
             RolesSpec::Any(roles) | RolesSpec::All(roles) => roles,
         }
@@ -37,20 +43,20 @@ impl RolesSpec {
 }
 
 impl Parse for RolesSpec {
-    /// Parses `any("r1", "r2")` or `all("r1", "r2")`.
+    /// Parses `any(r1, r2)` or `all(r1, r2)`.
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let variant: Ident = input.parse()?;
 
         let content;
-        syn::parenthesized!(content in input);
-        let literals = Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?;
-        let roles: Vec<String> = literals.iter().map(LitStr::value).collect();
+        parenthesized!(content in input);
+        let items = Punctuated::<RoleItem, Token![,]>::parse_terminated(&content)?;
+        let roles: Vec<RoleItem> = items.into_iter().collect();
 
         if !input.is_empty() {
             return Err(input.error("unexpected tokens after the role list"));
         }
         if roles.is_empty() {
-            return Err(syn::Error::new_spanned(
+            return Err(Error::new_spanned(
                 &variant,
                 "at least one role is required",
             ));
@@ -59,7 +65,7 @@ impl Parse for RolesSpec {
         match variant.to_string().as_str() {
             "any" => Ok(RolesSpec::Any(roles)),
             "all" => Ok(RolesSpec::All(roles)),
-            other => Err(syn::Error::new_spanned(
+            other => Err(Error::new_spanned(
                 &variant,
                 format!("expected `any` or `all`, found `{other}`"),
             )),
@@ -67,35 +73,35 @@ impl Parse for RolesSpec {
     }
 }
 
-/// Removes the `#[roles(...)]` attribute from `attrs` and returns its parsed
-/// [`RolesSpec`], or `None` if the method has no such attribute.
-pub(super) fn extract_roles_attr(attrs: &mut Vec<Attribute>) -> syn::Result<Option<RolesSpec>> {
-    let mut found = None;
-    let mut remaining = Vec::with_capacity(attrs.len());
-    for attr in take(attrs) {
-        if !is_roles(&attr) {
-            remaining.push(attr);
-            continue;
-        }
-        if found.is_some() {
-            return Err(syn::Error::new_spanned(&attr, "duplicate `#[roles]`"));
-        }
-        let Meta::List(list) = &attr.meta else {
-            return Err(syn::Error::new_spanned(
-                &attr,
-                "expected `#[roles(any(..))]` or `#[roles(all(..))]`",
-            ));
-        };
-        found = Some(syn::parse2(list.tokens.clone())?);
-    }
-    *attrs = remaining;
-    Ok(found)
+/// One required role as written in the attribute.
+pub(super) enum RoleItem {
+    /// A string literal, such as `"operator"`.
+    Literal(LitStr),
+    /// A path to a `&str` constant, such as `roles::OPERATOR`. Its type is
+    /// checked by the compiler where the guard uses it.
+    Path(Path),
 }
 
-/// Returns `true` if the last segment of the attribute's path is `roles`.
-fn is_roles(attr: &Attribute) -> bool {
-    attr.path()
-        .segments
-        .last()
-        .is_some_and(|seg| seg.ident == "roles")
+impl Parse for RoleItem {
+    /// Parses a string literal or a path.
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(LitStr) {
+            return input.parse().map(RoleItem::Literal);
+        }
+        input.parse().map(RoleItem::Path).map_err(|_| {
+            input.error(
+                "expected a string literal or a path to a `&str` constant, \
+                 such as `\"operator\"` or `roles::OPERATOR`",
+            )
+        })
+    }
+}
+
+impl ToTokens for RoleItem {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        match self {
+            RoleItem::Literal(literal) => literal.to_tokens(tokens),
+            RoleItem::Path(path) => path.to_tokens(tokens),
+        }
+    }
 }

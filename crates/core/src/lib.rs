@@ -20,7 +20,8 @@
 //! |---|---|---|
 //! | [`GrpcClient`] | `auth` (default) | `from_endpoint_with_provider` on tonic client structs |
 //! | [`GrpcNoAuthClient`] | `unauthenticated` | `from_endpoint` (no-auth) on tonic client structs |
-//! | [`keycloak_authenticated_service`] | `auth` (default) | Role-checking guards on `impl Trait for Type` blocks |
+//! | [`keycloak_authenticated_service`] | `auth` (default) | Access guards on `impl Trait for Type` blocks, optionally `strict` |
+//! | [`roles`], [`any_authenticated`] | `auth` (default) | The access policies a method declares; compile errors outside a `#[keycloak_authenticated_service]` block |
 //!
 //! See each module and the `grpc-macro` crate for full documentation.
 
@@ -52,9 +53,27 @@ pub use grpc_macro::GrpcClient;
 pub use grpc_macro::GrpcNoAuthClient;
 
 /// Attribute macro applied to `impl Trait for Type` blocks that injects
-/// Keycloak role-checking guards into methods annotated with `#[roles(...)]`.
+/// access guards into methods annotated with `#[roles(...)]` or
+/// `#[any_authenticated]`. `#[keycloak_authenticated_service(strict)]`
+/// makes a method without one of them a compile error.
 ///
 /// Re-exported here so consumers can write `#[rust_grpc_lib::keycloak_authenticated_service]`
 /// without a direct dependency on `grpc-macro`.
 #[cfg(any(feature = "auth", doc, test))]
 pub use grpc_macro::keycloak_authenticated_service;
+
+/// Access policy: the caller must hold the listed roles. Each role is a string
+/// literal or a path to a `&str` constant.
+///
+/// Consumed by [`keycloak_authenticated_service`]; a compile error anywhere
+/// else. Re-exported so that mistake gets a clear message instead of
+/// "cannot find attribute".
+#[cfg(any(feature = "auth", doc, test))]
+pub use grpc_macro::roles;
+
+/// Access policy: any caller with valid claims is allowed, no role is needed.
+///
+/// Consumed by [`keycloak_authenticated_service`]; a compile error anywhere
+/// else.
+#[cfg(any(feature = "auth", doc, test))]
+pub use grpc_macro::any_authenticated;

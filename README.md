@@ -404,7 +404,7 @@ Generates a `from_endpoint(endpoint)` constructor with no auth wiring. Applied a
 
 ### `#[keycloak_authenticated_service]`
 
-Applied to an `impl Trait for Type` block. Injects Keycloak role-checking guards into methods annotated with `#[roles(...)]`. A valid JWT is still required by the JWT validation layer for every method; methods without `#[roles(...)]` just get no role check from this macro.
+Applied to an `impl Trait for Type` block. Injects access guards into methods that declare an access policy: `#[roles(...)]` or `#[any_authenticated]`. A valid JWT is required by the JWT validation layer for every method, with or without a policy; a method with no policy just gets no check from this macro, unless the block is `strict` (below).
 
 **Placement.** Write it *above* `#[async_trait]` / `#[tonic::async_trait]`. The wrong order is a compile error that says so.
 
@@ -430,6 +430,22 @@ async fn set_data(
 
 **Custom claims.** `#[keycloak_authenticated_service(claims = MyClaims)]` selects the claims type that `Request<T>` methods read from the extensions (default `KeycloakClaims`). `MyClaims` must implement `Claims` and have a `has_role(&self, &str) -> bool` method. A `RequestContext<T, C>` parameter uses its own `C`.
 
+**Strict mode.** `#[keycloak_authenticated_service(strict)]` requires every method to declare a policy, so a method cannot lose its check by omission. A method without one is a compile error that names it. `strict` combines with `claims = ..` (`#[keycloak_authenticated_service(strict, claims = MyClaims)]`). `strict` becomes the default in 8.0.0.
+
+`strict` applies to every method of the annotated block, so use it on an `impl` of a service trait whose methods are all RPC handlers. A helper method in the same block would need a policy too, and a policy requires the method to take a request parameter, so keep helpers in a separate `impl` block.
+
+```rust
+#[rust_grpc_lib::keycloak_authenticated_service(strict)]
+#[tonic::async_trait]
+impl Daq for MyDaqService {
+    #[roles(any(roles::OPERATOR, roles::ADMIN))]
+    async fn set_data(&self, request: Request<SetDataRequest>) -> Result<Response<SetDataResponse>, Status> { todo!() }
+
+    #[any_authenticated]
+    async fn get_data(&self, request: Request<GetDataRequest>) -> Result<Response<GetDataResponse>, Status> { todo!() }
+}
+```
+
 **Consumer dependencies.** The expansion names `::rust_grpc_lib`, `::tonic` and `::tracing`, so it uses whatever versions your crate depends on; this library neither pins nor re-exports them. Three things follow, and they cannot be avoided:
 
 - Depend on `rust-grpc-lib`, `tonic` and `tracing` under their normal names. Renaming a dependency (`package = ".."`) is not supported.
@@ -438,14 +454,21 @@ async fn set_data(
 
 **Denied calls are logged.** When a caller lacks the required roles the client receives `permission_denied("required role not present")`, and the server emits a `warn` event with target `rust_grpc_lib::authz` and message `authorization denied`. Its fields are `user` (the `sub` claim), `rpc.service` (the trait name), `rpc.method` (the Rust method name), `required_roles`, `role_mode` (`any` or `all`) and `remote_addr` when known. The token, the other claims and the roles the caller actually holds are never logged. Filter or route it with `RUST_LOG=rust_grpc_lib::authz=warn`. Repeated denials are not rate limited by the library; use your subscriber's filters if that matters.
 
-### `#[roles(...)]`
+### Access policies: `#[roles(...)]`, `#[any_authenticated]`
 
-Marker attribute consumed by `#[keycloak_authenticated_service]`. Two variants:
+Marker attributes consumed by `#[keycloak_authenticated_service]`. A method declares at most one.
 
-| Variant | Meaning |
+| Policy | Meaning |
 |---|---|
 | `#[roles(any("r1", "r2"))]` | At least one of the listed roles must be present in the JWT claims |
 | `#[roles(all("r1", "r2"))]` | Every listed role must be present |
+| `#[any_authenticated]` | Any caller with valid claims; no role needed. Fails closed with `internal` if the claims are missing |
+
+Each role in a `roles` list is a string literal or a path to a `&str` constant, so role names can live in one module: `#[roles(any(roles::OPERATOR, "admin"))]`. Anything else is a compile error.
+
+The attributes only work inside a block annotated with `#[keycloak_authenticated_service]`. Written anywhere else they are a compile error, not a silent no-op.
+
+These attributes cannot make a method reachable without a JWT: authentication happens in the JWT layer, which wraps the whole service, before any method runs. For that reason there is deliberately no "public" policy.
 
 ---
 

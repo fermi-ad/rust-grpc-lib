@@ -1,5 +1,5 @@
-error: expected string literal
+error: expected a string literal or a path to a `&str` constant, such as `"operator"` or `roles::OPERATOR`
   --> src/compile_fail_cases/non_literal_role.rs:17:17
    |
-17 |     #[roles(any(ADMIN))]
-   |                 ^^^^^
+17 |     #[roles(any(42))]
+   |                 ^^
