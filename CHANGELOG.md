@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [7.7.0] — 2026-11-10
+
+### Changed
+
+- **Updated the pin of interface-definitions.** Update mi8-autotune proto
+
+---
+
 ## [7.6.0] — 2026-10-29
 
 ### Added
