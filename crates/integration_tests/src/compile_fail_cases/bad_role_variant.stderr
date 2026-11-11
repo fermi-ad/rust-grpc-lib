@@ -1,0 +1,5 @@
+error: expected `any` or `all`, found `some`
+  --> src/compile_fail_cases/bad_role_variant.rs:15:13
+   |
+15 |     #[roles(some("admin"))]
+   |             ^^^^

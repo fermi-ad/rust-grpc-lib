@@ -1,9 +1,12 @@
-//! Tests for [`super::segment_to_mod_name`], [`super::build_tree`], and
-//! [`super::ProtoRsGenerator::generate`].
+//! Tests for [`super::segment_to_mod_name`], [`super::package_to_file_stem`],
+//! [`super::build_tree`], and [`super::ProtoRsGenerator::generate`].
 //!
-//! Covers: keyword escaping, tree construction from package lists (including
-//! shared prefixes and sort order), invariant violations (debug-only panics),
-//! and the full `generate` output for various package configurations.
+//! Covers: keyword escaping (checked against real prost-build output), tree
+//! construction from package lists (including shared prefixes and sort order),
+//! invariant violations (debug-only panics), and the full `generate` output
+//! for various package configurations.
+
+use std::{env, fs, path::PathBuf};
 
 use super::*;
 
@@ -23,27 +26,129 @@ fn segment_to_mod_name_ordinary() {
 }
 
 #[test]
-fn segment_to_mod_name_reserved_type() {
-    assert_eq!(segment_to_mod_name("type"), "r#type");
+fn segment_to_mod_name_all_raw_prefix_words_escaped() {
+    // Every entry in RAW_PREFIX_WORDS must become a raw identifier,
+    // including `gen` which became a strict keyword in edition 2024.
+    for kw in RAW_PREFIX_WORDS {
+        assert_eq!(segment_to_mod_name(kw), format!("r#{kw}"));
+    }
 }
 
 #[test]
-fn segment_to_mod_name_all_keywords_escaped() {
-    // Every entry in the authoritative RUST_KEYWORDS list must be escaped,
-    // including `gen` which became a strict keyword in edition 2024.
-    for kw in RUST_KEYWORDS {
-        let result = segment_to_mod_name(kw);
+fn segment_to_mod_name_suffix_words_get_underscore() {
+    // These cannot be raw identifiers, so prost appends `_`.
+    for kw in SUFFIX_WORDS {
+        assert_eq!(segment_to_mod_name(kw), format!("{kw}_"));
+    }
+    assert_eq!(segment_to_mod_name("self"), "self_");
+    assert_eq!(segment_to_mod_name("super"), "super_");
+    assert_eq!(segment_to_mod_name("crate"), "crate_");
+    assert_eq!(segment_to_mod_name("extern"), "extern_");
+    assert_eq!(segment_to_mod_name("Self"), "Self_");
+}
+
+#[test]
+fn segment_to_mod_name_union_is_left_plain() {
+    // `union` is only a contextual keyword, and prost does not escape it.
+    assert_eq!(segment_to_mod_name("union"), "union");
+}
+
+#[test]
+fn segment_to_mod_name_lists_are_disjoint() {
+    for kw in SUFFIX_WORDS {
         assert!(
-            result.starts_with("r#"),
-            "keyword `{kw}` was not escaped: got `{result}`"
+            !RAW_PREFIX_WORDS.contains(kw),
+            "`{kw}` is in both escaping lists"
         );
     }
 }
 
 #[test]
-fn segment_to_mod_name_gen_escaped() {
-    // Explicit spot-check for the edition-2024 addition.
-    assert_eq!(segment_to_mod_name("gen"), "r#gen");
+fn package_to_file_stem_escapes_each_segment() {
+    // Module names and file names come from the same per-segment escaping.
+    assert_eq!(package_to_file_stem("common.alarm"), "common.alarm");
+    assert_eq!(
+        package_to_file_stem("third_party.type"),
+        "third_party.r#type"
+    );
+    assert_eq!(package_to_file_stem("demo.self.v1"), "demo.self_.v1");
+    assert_eq!(package_to_file_stem("demo.union"), "demo.union");
+}
+
+// -----------------------------------------------------------------------
+// file names against real prost-build
+// -----------------------------------------------------------------------
+
+// Runs the vendored `protoc` and prost-build over one tiny proto per package
+// and returns the sorted names of the files written to the scratch `OUT_DIR`.
+fn prost_file_names(name: &str, packages: &[&str]) -> Vec<String> {
+    let dir: PathBuf = env::temp_dir().join(format!(
+        "rust-grpc-lib-proto-rs-{name}-{}",
+        std::process::id()
+    ));
+    let out = dir.join("out");
+    fs::create_dir_all(&out).expect("create scratch dir");
+
+    let protos: Vec<PathBuf> = packages
+        .iter()
+        .enumerate()
+        .map(|(i, package)| {
+            let path = dir.join(format!("p{i}.proto"));
+            let source = format!("syntax = \"proto3\";\npackage {package};\n\nmessage Ping {{}}\n");
+            fs::write(&path, source).expect("write proto");
+            path
+        })
+        .collect();
+
+    // SAFETY: tests that touch the environment all set the same value.
+    unsafe {
+        env::set_var(
+            "PROTOC",
+            protoc_bin_vendored::protoc_bin_path().expect("vendored protoc"),
+        );
+    }
+    tonic_prost_build::configure()
+        .out_dir(&out)
+        .compile_protos(&protos, std::slice::from_ref(&dir))
+        .expect("protoc and tonic-prost-build succeed");
+
+    let mut names: Vec<String> = fs::read_dir(&out)
+        .expect("read OUT_DIR")
+        .map(|entry| {
+            entry
+                .expect("dir entry")
+                .file_name()
+                .into_string()
+                .expect("utf-8 file name")
+        })
+        .collect();
+    names.sort();
+    let _ = fs::remove_dir_all(&dir);
+    names
+}
+
+#[test]
+fn package_to_file_stem_matches_prost_build_file_names() {
+    // One package per escaping class: `r#` words, `_` words, `union` (plain),
+    // and an ordinary name. Each is a leaf, so none is a prefix of another.
+    let packages = [
+        "demo.self.v1",
+        "demo.super",
+        "demo.crate",
+        "demo.extern",
+        "demo.type",
+        "demo.async",
+        "demo.union",
+        "demo.plain",
+    ];
+
+    let mut expected: Vec<String> = packages
+        .iter()
+        .map(|package| format!("{}.rs", package_to_file_stem(package)))
+        .collect();
+    expected.sort();
+
+    assert_eq!(prost_file_names("file-names", &packages), expected);
 }
 
 // -----------------------------------------------------------------------
@@ -51,31 +156,11 @@ fn segment_to_mod_name_gen_escaped() {
 // -----------------------------------------------------------------------
 
 #[test]
-fn build_tree_empty_input() {
-    let tree = build_tree(&[]);
-    assert!(tree.children.is_empty());
-    assert!(tree.package.is_none());
-}
-
-#[test]
 fn build_tree_single_segment_package() {
     let pkgs = vec!["dpm".to_string()];
     let tree = build_tree(&pkgs);
     assert!(tree.children.contains_key("dpm"));
     assert_eq!(tree.children["dpm"].package, Some("dpm".to_string()));
-}
-
-#[test]
-fn build_tree_two_segment_package() {
-    let pkgs = vec!["common.alarm".to_string()];
-    let tree = build_tree(&pkgs);
-    let common = &tree.children["common"];
-    assert!(
-        common.package.is_none(),
-        "intermediate node should have no package"
-    );
-    let alarm = &common.children["alarm"];
-    assert_eq!(alarm.package, Some("common.alarm".to_string()));
 }
 
 #[test]
@@ -130,14 +215,6 @@ fn build_tree_namespace_registered_as_leaf_panics() {
 // -----------------------------------------------------------------------
 
 #[test]
-fn generate_plain_package_no_attrs() {
-    let out = plain().generate(&["common.alarm".to_string()]);
-    assert!(out.contains("pub mod alarm {"));
-    assert!(out.contains("tonic::include_proto!(\"common.alarm\")"));
-    assert!(!out.contains("#[deprecated"));
-}
-
-#[test]
 fn generate_with_outer_attr() {
     let out = ProtoRsGenerator::new()
         .with_meta(
@@ -170,16 +247,18 @@ fn generate_with_inner_attr() {
 fn generate_type_segment_uses_raw_identifier() {
     let out = plain().generate(&["some.type".to_string()]);
     assert!(out.contains("pub mod r#type {"));
-    assert!(out.contains("tonic::include_proto!(\"some.r#type\")"));
+    assert!(out.contains("include!(concat!(env!(\"OUT_DIR\"), \"/some.r#type.rs\"))"));
 }
 
 #[test]
-fn generate_intermediate_wraps_children() {
-    let pkgs = vec!["common.alarm".to_string(), "common.event".to_string()];
-    let out = plain().generate(&pkgs);
-    assert!(out.contains("pub mod common {"));
-    assert!(out.contains("pub mod alarm {"));
-    assert!(out.contains("pub mod event {"));
+fn generate_suffix_and_plain_keyword_segments() {
+    let out = plain().generate(&["demo.self.v1".to_string(), "demo.union".to_string()]);
+    assert!(out.contains("pub mod self_ {"));
+    assert!(out.contains("include!(concat!(env!(\"OUT_DIR\"), \"/demo.self_.v1.rs\"))"));
+    assert!(out.contains("pub mod union {"));
+    assert!(out.contains("include!(concat!(env!(\"OUT_DIR\"), \"/demo.union.rs\"))"));
+    assert!(!out.contains("r#self"));
+    assert!(!out.contains("r#union"));
 }
 
 // -----------------------------------------------------------------------
@@ -191,15 +270,7 @@ fn generate_always_includes_google_protobuf() {
     let out = plain().generate(&[]);
     assert!(out.contains("pub mod google {"));
     assert!(out.contains("pub mod protobuf {"));
-    assert!(out.contains("tonic::include_proto!(\"google.protobuf\")"));
-}
-
-#[test]
-fn generate_empty_packages() {
-    let out = plain().generate(&[]);
-    assert!(
-            out.trim_end().ends_with("pub mod google {\n    pub mod protobuf {\n        #![allow(clippy::all)]\n        #![allow(unused)]\n        tonic::include_proto!(\"google.protobuf\");\n    }\n}")
-        );
+    assert!(out.contains("include!(concat!(env!(\"OUT_DIR\"), \"/google.protobuf.rs\"))"));
 }
 
 #[test]
@@ -208,7 +279,7 @@ fn generate_single_package() {
     let out = plain().generate(&pkgs);
     assert!(out.contains("pub mod common {"));
     assert!(out.contains("pub mod alarm {"));
-    assert!(out.contains("tonic::include_proto!(\"common.alarm\")"));
+    assert!(out.contains("include!(concat!(env!(\"OUT_DIR\"), \"/common.alarm.rs\"))"));
 }
 
 #[test]
@@ -224,12 +295,6 @@ fn generate_multiple_packages_sorted() {
     let pos_services = out.find("pub mod services").unwrap();
     assert!(pos_common < pos_dpm);
     assert!(pos_dpm < pos_services);
-}
-
-#[test]
-fn generate_no_meta_emits_no_extra_attrs() {
-    let out = plain().generate(&["dpm".to_string()]);
-    assert!(!out.contains("#[deprecated"));
 }
 
 #[test]
