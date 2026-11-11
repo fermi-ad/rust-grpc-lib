@@ -1,298 +1,233 @@
-//! Procedural macros for `rust-grpc-lib`.
+//! Procedural macros for `rust-grpc-lib`, which re-exports them.
 //!
-//! This crate exposes four public macros:
+//! - Clients: [`GrpcClient`] adds two constructors to a tonic client:
+//!   `public(endpoint)`, which sends no token, and
+//!   `authenticated(endpoint, provider)`, which attaches the provider's token
+//!   to every request.
+//! - Services: [`access_controlled_service`] on an `impl Trait for Type` block
+//!   requires every method to declare one access policy, [`roles`],
+//!   [`any_authenticated`] or [`public`], and emits the table that
+//!   `GrpcServer::add_service` enforces.
 //!
-//! - [`GrpcClient`] — derive macro that generates
-//!   `from_endpoint_with_provider` on a tonic client struct, wiring it into
-//!   the process-wide channel pool with JWT auth via `ClientJwtInterceptor`.
-//! - [`GrpcNoAuthClient`] — derive macro that generates `from_endpoint` (no
-//!   auth) on a tonic client struct. For test harnesses only; requires the
-//!   `unauthenticated` feature on `rust-grpc-lib`.
-//! - [`keycloak_authenticated_service`] — attribute macro applied to an `impl Trait for Type`
-//!   block that injects Keycloak role-checking guards into methods annotated
-//!   with `#[roles(...)]`.
-//! - [`roles`] — marker attribute consumed by [`keycloak_authenticated_service`]. A pass-through
-//!   no-op when used without `#[keycloak_authenticated_service]` on the enclosing `impl` block.
+//! The consuming crate must depend on `rust-grpc-lib` under that name (no
+//! `package = ".."` rename): the emitted code names only `::rust_grpc_lib`,
+//! which re-exports the tonic it needs, so no direct `tonic` dependency is
+//! required.
 //!
-//! Internal helpers (`RolesSpec`, `RolesArgs`, `extract_roles_attr`,
-//! `first_param_ident`, `build_guard`) are private to this crate.
+//! The [service template](https://github.com/fermi-ad/rust-grpc-service-template)
+//! is a runnable example service; `docs/server.md` and `docs/client.md` cover
+//! both halves in depth.
+// The dev-dependency `rust-grpc-lib` is used only by the doctests.
+#![cfg_attr(test, allow(unused_crate_dependencies))]
 
-use std::{iter, mem::take};
+// Maintainer notes: a proc-macro crate must define its macros at the crate
+// root, so this file holds only entry points and public docs. Expansion lives
+// in `client` and `service` (and its submodules), whose module docs cover
+// internals and security invariants. The doctests need `rust-grpc-lib`
+// (`server`) as a dev-dependency, since the expansion names it and it
+// re-exports `tonic`. That is a dev-dependency cycle Cargo allows; doctests
+// link this crate's normal build, so there is one copy.
 
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2};
+use proc_macro2::TokenStream as TokenStream2;
 
-use quote::quote;
-use syn::{
-    Attribute, DeriveInput, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, Lit, Meta, MetaList, Pat,
-    Path, Token,
-    parse::{Parse, ParseStream},
-    parse_macro_input,
-};
+use crate::service::Kind as PolicyKind;
 
+mod client;
+mod service;
+
+/// Derive that adds two constructors to a tonic client, both taking a channel
+/// from the process-wide pool.
+///
+/// - `public(endpoint: &str) -> Result<Self, ChannelError>` connects without a
+///   token, for calling methods the server marks `#[public]`. Methods behind a
+///   policy answer `Unauthenticated`.
+/// - `authenticated<P: TokenProvider>(endpoint: &str, provider: P) ->
+///   Result<Name<AuthenticatedClient<P>>, ChannelError>` wraps the channel in
+///   `AuthenticatedClient` with a `ClientJwtInterceptor`, so every request
+///   carries a token from `provider`. Use it for methods behind a policy.
+///
+/// The target method's policy decides which constructor to use. The server's
+/// gate (installed by `GrpcServer::add_service`) is the authority: a gated
+/// method called without a valid token answers `Unauthenticated`.
+///
+/// Derive it on a type with one type parameter and a `new(inner)` constructor,
+/// as tonic clients have; only the type's name is used. The derive raises no
+/// errors of its own: a type without that shape fails to type-check the
+/// generated `impl`.
+///
+/// # Name collisions
+///
+/// The constructors are inherent associated functions, so an RPC whose
+/// snake_case method name is `public` or `authenticated` collides with them
+/// (`E0592`, duplicate definitions). Rename the RPC in the `.proto` file.
 #[proc_macro_derive(GrpcClient)]
 pub fn grpc_client_derive(input: TokenStream) -> TokenStream {
-    let parsed = parse_macro_input!(input as DeriveInput);
-    let name = &parsed.ident;
-
-    // Use `::rust_grpc_lib` so the impl resolves against the `core` crate when this
-    // derive is expanded, not against any re-export in a consuming crate.
-    let as_grpc_client = quote! {
-        impl #name<::tonic::transport::Channel>
-        {
-            pub fn from_endpoint_with_provider<P: ::rust_grpc_lib::auth::TokenProvider>(
-                endpoint: &str,
-                provider: P,
-            ) -> Result<#name<::tonic::service::interceptor::InterceptedService<::tonic::transport::Channel, ::rust_grpc_lib::auth::ClientJwtInterceptor<P>>>, ::tonic::transport::Error>
-            {
-                let channel = ::rust_grpc_lib::pool::get_channel(endpoint)?;
-                Ok(#name::new(::tonic::service::interceptor::InterceptedService::new(channel, ::rust_grpc_lib::auth::ClientJwtInterceptor::new(provider))))
-            }
-        }
-    };
-    TokenStream::from(as_grpc_client)
+    into_token_stream(client::expand_grpc_client(input.into()))
 }
 
-#[proc_macro_derive(GrpcNoAuthClient)]
-pub fn grpc_no_auth_client_derive(input: TokenStream) -> TokenStream {
-    let parsed = parse_macro_input!(input as DeriveInput);
-    let name = &parsed.ident;
-
-    // Use `::rust_grpc_lib` so the impl resolves against the `core` crate when this
-    // derive is expanded, not against any re-export in a consuming crate.
-    let as_grpc_client = quote! {
-        impl #name<::tonic::transport::Channel>
-        {
-            pub fn from_endpoint(
-                endpoint: &str,
-            ) -> Result<Self, ::tonic::transport::Error>
-            {
-                let channel = ::rust_grpc_lib::pool::get_channel(endpoint)?;
-                Ok(#name::new(channel))
-            }
-        }
-    };
-    TokenStream::from(as_grpc_client)
-}
-
-/// Marker attribute consumed by [`keycloak_authenticated_service`].
+/// Access policy: the caller needs a valid token with some or all of the
+/// listed realm roles.
 ///
-/// When used standalone (without `#[keycloak_authenticated_service]` on the enclosing `impl`
-/// block) this attribute is a pass-through no-op so that the code still
-/// compiles. `#[keycloak_authenticated_service]` strips and processes it before emitting the
-/// final `impl` block.
+/// - `#[roles(any("a", "b"))]`: at least one listed role.
+/// - `#[roles(all("a", "b"))]`: every listed role.
+///
+/// Each role is a string literal or a path to a `&str` constant. The method
+/// takes a `RequestContext<T>`. See [`access_controlled_service`] for an
+/// example and the errors a malformed list raises.
+///
+/// Policy attributes are valid only on a method inside an
+/// [`access_controlled_service`] block, which strips them (so they need no
+/// import there). Anywhere else they are a compile error, so a policy is
+/// never silently ignored.
+#[proc_macro_attribute]
+pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    unstripped(PolicyKind::Roles, item)
+}
+
+/// Access policy: any caller with a valid token; no role is needed.
+///
+/// The method takes a `RequestContext<T>`. Takes no arguments; placement rules
+/// as for [`roles`].
+#[proc_macro_attribute]
+pub fn any_authenticated(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    unstripped(PolicyKind::AnyAuthenticated, item)
+}
+
+/// Access policy: open to everyone, with or without a token.
+///
+/// The only way to make a method reachable without a token, and easy to grep
+/// for. The method takes a `PublicContext<T>`, which carries the message and
+/// call information but no claims or token, even if the caller sent one.
+/// Takes no arguments; placement rules as for [`roles`].
+#[proc_macro_attribute]
+pub fn public(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    unstripped(PolicyKind::Public, item)
+}
+
+/// Attribute for an `impl Trait for Type` block of a tonic service trait:
+/// every method must declare exactly one access policy, [`roles`],
+/// [`any_authenticated`] or [`public`].
+///
+/// The macro declares policies; it authenticates nothing and emits no check.
+/// The gate that `GrpcServer::add_service` installs enforces the table before
+/// any handler runs and denies any method not in it.
 ///
 /// # Usage
 ///
-/// ```rust,ignore
-/// #[keycloak_authenticated_service]
+/// Write it **above** `#[rust_grpc_lib::async_trait]`, so it sees the `async fn`
+/// signatures before `async_trait` rewrites them. Each method's first
+/// non-`self` parameter is `RequestContext<T>` (`roles`, `any_authenticated`)
+/// or `PublicContext<T>` (`public`), matched by its last path segment and
+/// bound to a plain name such as `ctx` or `mut ctx`.
+///
+/// ```rust
+/// # use std::marker::PhantomData;
+/// # use grpc_macro::access_controlled_service;
+/// # use rust_grpc_lib::auth::{PublicContext, RequestContext};
+/// # use rust_grpc_lib::tonic::{Request, Response, Status};
+/// # struct Msg;
+/// # #[rust_grpc_lib::async_trait]
+/// # trait MyService: Send + Sync + 'static {
+/// #     async fn set_data(&self, r: Request<Msg>) -> Result<Response<Msg>, Status>;
+/// #     async fn reset(&self, r: Request<Msg>) -> Result<Response<Msg>, Status>;
+/// #     async fn ping(&self, r: Request<Msg>) -> Result<Response<Msg>, Status>;
+/// #     async fn version(&self, r: Request<Msg>) -> Result<Response<Msg>, Status>;
+/// # }
+/// # struct MyServiceServer<T>(PhantomData<T>);
+/// # struct MyServer;
+/// # mod roles { pub const OPERATOR: &str = "operator"; pub const ADMIN: &str = "admin"; }
+/// #[access_controlled_service]
+/// #[rust_grpc_lib::async_trait]
 /// impl MyService for MyServer {
 ///     #[roles(any("operator", "admin"))]
-///     async fn set_data(&self, request: Request<SetDataRequest>)
-///         -> Result<Response<SetDataResponse>, Status>
-///     {
+///     async fn set_data(&self, ctx: RequestContext<Msg>) -> Result<Response<Msg>, Status> {
+///         # let _ = ctx;
 ///         // ...
+///         # Ok(Response::new(Msg))
+///     }
+///
+///     #[roles(all(roles::OPERATOR, roles::ADMIN))]
+///     async fn reset(&self, ctx: RequestContext<Msg>) -> Result<Response<Msg>, Status> {
+///         # let _ = ctx;
+///         // ...
+///         # Ok(Response::new(Msg))
+///     }
+///
+///     #[any_authenticated]
+///     async fn ping(&self, ctx: RequestContext<Msg>) -> Result<Response<Msg>, Status> {
+///         # let _ = ctx;
+///         // ...
+///         # Ok(Response::new(Msg))
+///     }
+///
+///     #[public]
+///     async fn version(&self, ctx: PublicContext<Msg>) -> Result<Response<Msg>, Status> {
+///         # let _ = ctx;
+///         // ...
+///         # Ok(Response::new(Msg))
 ///     }
 /// }
+/// # fn main() {}
 /// ```
+///
+/// # Arguments
+///
+/// `server = path::FooServer` names the generated server type, without generic
+/// arguments. By default it is the trait path with its last segment `Foo`
+/// renamed to `FooServer`; pass it when that name is not in scope.
+///
+/// # Generated code
+///
+/// - The block, with policy attributes stripped and each context parameter
+///   changed to the `::rust_grpc_lib::__private::tonic::Request<T>` the trait
+///   expects under a hidden
+///   name. The body first builds your context from it with
+///   `try_from_request`, which fails closed with `Internal` unless the call
+///   came through `add_service`.
+/// - `impl ServicePolicy<FooServer<Type>> for Type`, the policy table that
+///   `add_service` requires. Wire names match the Rust names ignoring case,
+///   `_` and `r#`.
+///
+/// # Compile errors
+///
+/// - An unknown argument, or `server` given twice.
+/// - An inherent (non-trait) `impl` block.
+/// - Generic arguments on `server = ..`, or on the trait path when `server`
+///   is absent (the trait path is not checked when `server` is given).
+/// - The attribute placed below `#[async_trait]`.
+/// - A method with no policy, or with more than one.
+/// - `#[roles]` not of the form `roles(any(..))` or `roles(all(..))`: another
+///   mode, an empty role list, trailing tokens, or a role that is neither a
+///   string literal nor a path.
+/// - Arguments on `#[any_authenticated]` or `#[public]`.
+/// - A method with no request parameter.
+/// - A parameter that is not a context, such as a plain `tonic::Request<T>`.
+/// - A context without a message type, such as a bare `RequestContext`.
+/// - The wrong context for the policy, such as `RequestContext` on a
+///   `#[public]` method.
+/// - A context bound to anything but a plain name (destructuring, `ref`, `@`).
+/// - Two methods whose names are equal ignoring case, `_` and `r#`: the gate
+///   could not tell them apart.
+///
+/// Errors from different methods are reported together.
 #[proc_macro_attribute]
-pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    // Pass-through; keycloak_authenticated_service strips and processes this attribute.
-    item
+pub fn access_controlled_service(attr: TokenStream, item: TokenStream) -> TokenStream {
+    into_token_stream(service::expand(attr.into(), item.into()))
 }
 
-/// Attribute macro applied to an `impl Trait for Type` block that injects
-/// Keycloak role-checking guards into methods annotated with `#[roles(...)]`.
-///
-/// # Role check variants
-///
-/// - `#[roles(any("r1", "r2"))]` — at least one of the listed roles must be
-///   present in the JWT claims.
-/// - `#[roles(all("r1", "r2"))]` — every listed role must be present.
-/// - No `#[roles(...)]` attribute — the method is left untouched (a valid JWT
-///   is still required by the `JwtValidationLayer`, but no role check is
-///   injected by this macro).
-///
-/// # Generated code shape
-///
-/// ```rust,ignore
-/// async fn set_data(&self, request: Request<SetDataRequest>)
-///     -> Result<Response<SetDataResponse>, Status>
-/// {
-///     {
-///         let __claims = request
-///             .extensions()
-///             .get::<::rust_grpc_lib::auth::KeycloakClaims>()
-///             .ok_or_else(|| ::tonic::Status::internal(
-///                 "JWT claims not populated; ensure JwtValidationLayer is installed",
-///             ))?;
-///         if !["operator", "admin"].iter().any(|r| __claims.has_role(r)) {
-///             return Err(::tonic::Status::permission_denied("required role not present"));
-///         }
-///     }
-///     // original body …
-/// }
-/// ```
-#[proc_macro_attribute]
-pub fn keycloak_authenticated_service(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let mut impl_block = parse_macro_input!(item as ItemImpl);
-
-    for impl_item in &mut impl_block.items {
-        let ImplItem::Fn(method) = impl_item else {
-            continue;
-        };
-
-        // Find and remove the #[roles(...)] attribute, capturing its content.
-        let roles_attr = match extract_roles_attr(&mut method.attrs) {
-            Ok(roles_attr) => roles_attr,
-            Err(e) => return e,
-        };
-
-        let Some(roles_spec) = roles_attr else {
-            // No roles attribute — leave method untouched.
-            continue;
-        };
-
-        // Determine the name of the first non-self parameter so we can call
-        // `.extensions()` on it.
-        let request_ident = first_param_ident(method);
-
-        // Build the guard block.
-        let guard = build_guard(request_ident, &roles_spec);
-
-        // Prepend the guard to the existing method body.
-        let original_stmts = take(&mut method.block.stmts);
-        match syn::parse2(quote! { #guard }) {
-            Ok(guard_stmt) => {
-                method.block.stmts = iter::once(guard_stmt).chain(original_stmts).collect()
-            }
-            Err(err) => return TokenStream::from(err.to_compile_error()),
-        }
-    }
-
-    TokenStream::from(quote! { #impl_block })
+// Turns an expansion result into the macro's output, rendering an error as a
+// `compile_error!` at the span it carries.
+fn into_token_stream(result: syn::Result<TokenStream2>) -> TokenStream {
+    result.unwrap_or_else(syn::Error::into_compile_error).into()
 }
 
-// Internal helpers
-
-/// Describes the parsed content of a `#[roles(...)]` attribute.
-enum RolesSpec {
-    Any(Vec<String>),
-    All(Vec<String>),
-}
-
-/// Parses `any("r1", "r2")` or `all("r1", "r2")` from a [`MetaList`] token
-/// stream.
-struct RolesArgs {
-    spec: RolesSpec,
-}
-
-impl Parse for RolesArgs {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        // Expect an identifier: `any` or `all`.
-        let variant: syn::Ident = input.parse()?;
-        let variant_str = variant.to_string();
-
-        // Expect parenthesised list of string literals.
-        let content;
-        syn::parenthesized!(content in input);
-
-        let mut roles = Vec::new();
-        loop {
-            if content.is_empty() {
-                break;
-            }
-            let Lit::Str(s) = content.parse()? else {
-                return Err(syn::Error::new_spanned(
-                    &variant,
-                    "roles must be string literals",
-                ));
-            };
-            roles.push(s.value());
-            if content.is_empty() {
-                break;
-            }
-            let _comma: Token![,] = content.parse()?;
-        }
-
-        let spec = match variant_str.as_str() {
-            "any" => RolesSpec::Any(roles),
-            "all" => RolesSpec::All(roles),
-            other => {
-                return Err(syn::Error::new_spanned(
-                    &variant,
-                    format!("expected `any` or `all`, found `{other}`"),
-                ));
-            }
-        };
-
-        Ok(RolesArgs { spec })
-    }
-}
-
-/// Returns `true` if the [`Path`] is a single-segment path equal to `"roles"`.
-fn path_is_roles(path: &Path) -> bool {
-    path.get_ident().map(|i| i == "roles").unwrap_or(false)
-}
-
-/// Finds the first `#[roles(...)]` attribute in `attrs`, removes it, and
-/// returns the parsed [`RolesSpec`]. Returns `None` if no such attribute
-/// exists.
-fn extract_roles_attr(attrs: &mut Vec<Attribute>) -> Result<Option<RolesSpec>, TokenStream> {
-    let Some(tokens) = attrs
-        .iter()
-        .position(|a| matches!(&a.meta, Meta::List(ml) if path_is_roles(&ml.path)))
-        .and_then(|pos| {
-            let attr = attrs.remove(pos);
-            match attr.meta {
-                Meta::List(MetaList { tokens, .. }) => Some(tokens),
-                _ => None,
-            }
-        })
-    else {
-        return Ok(None);
-    };
-
-    syn::parse2::<RolesArgs>(tokens)
-        .map(|args| Some(args.spec))
-        .map_err(|e| TokenStream::from(e.to_compile_error()))
-}
-
-/// Returns the [`Ident`] of the first non-`self` parameter of `method`,
-/// or falls back to the identifier `request` if none can be found.
-fn first_param_ident(method: &ImplItemFn) -> Ident {
-    for input in &method.sig.inputs {
-        if let FnArg::Typed(pat_type) = input
-            && let Pat::Ident(pat_ident) = pat_type.pat.as_ref()
-        {
-            return pat_ident.ident.clone();
-        }
-    }
-    // Fallback — should not happen for well-formed gRPC service methods.
-    Ident::new("request", Span::call_site())
-}
-
-/// Builds the role-check guard block as a [`TokenStream2`].
-fn build_guard(request_ident: Ident, spec: &RolesSpec) -> TokenStream2 {
-    let (roles, iter_method) = match spec {
-        RolesSpec::Any(r) => (r, quote! { any }),
-        RolesSpec::All(r) => (r, quote! { all }),
-    };
-
-    // Build the array literal: ["r1", "r2", ...]
-    let role_literals: Vec<TokenStream2> = roles.iter().map(|r| quote! { #r }).collect();
-
-    quote! {
-        {
-            let __claims = #request_ident
-                .extensions()
-                .get::<::rust_grpc_lib::auth::KeycloakClaims>()
-                .ok_or_else(|| ::tonic::Status::internal(
-                    "JWT claims not populated; ensure JwtValidationLayer is installed"
-                ))?;
-            if ![#(#role_literals),*].iter().#iter_method(|r| __claims.has_role(r)) {
-                return Err(::tonic::Status::permission_denied("required role not present"));
-            }
-        }
-    }
+// The output of a policy attribute that reached its own expansion, which
+// means `#[access_controlled_service]` did not strip it: a
+// `compile_error!` followed by the item unchanged, so the user sees only this
+// error rather than a cascade.
+fn unstripped(kind: PolicyKind, item: TokenStream) -> TokenStream {
+    let mut output = TokenStream::from(kind.unstripped_error().into_compile_error());
+    output.extend(item);
+    output
 }
