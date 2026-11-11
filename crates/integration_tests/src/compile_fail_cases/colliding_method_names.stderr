@@ -1,0 +1,5 @@
+error: method `getuser` collides with `get_user`: the access gate matches methods by their lowercase name without underscores, so it could not tell their policies apart
+  --> src/compile_fail_cases/colliding_method_names.rs:29:14
+   |
+29 |     async fn getuser(&self, ctx: rust_grpc_lib::auth::PublicContext<String>) -> Result<Response<String>, Status> {
+   |              ^^^^^^^

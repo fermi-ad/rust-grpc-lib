@@ -1,0 +1,35 @@
+error: `#[roles]` has no effect here: it must be written on a method (`fn`) inside an `impl` block annotated with `#[access_controlled_service]`, which must be written above `#[async_trait]`
+  --> src/compile_fail_cases/policy_outside_service.rs:10:5
+   |
+10 |     #[roles(any("admin"))]
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `roles` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: `#[any_authenticated]` has no effect here: it must be written on a method (`fn`) inside an `impl` block annotated with `#[access_controlled_service]`, which must be written above `#[async_trait]`
+  --> src/compile_fail_cases/policy_outside_service.rs:15:5
+   |
+15 |     #[any_authenticated]
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `any_authenticated` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0425]: cannot find type `RequestContext` in this scope
+  --> src/compile_fail_cases/policy_outside_service.rs:11:34
+   |
+11 |     async fn guarded(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+   |                                  ^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find type `RequestContext` in this scope
+  --> src/compile_fail_cases/policy_outside_service.rs:16:40
+   |
+16 |     async fn authenticated(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+   |                                        ^^^^^^^^^^^^^^ not found in this scope
+
+warning: unused import: `Request`
+ --> src/compile_fail_cases/policy_outside_service.rs:5:28
+  |
+5 | use rust_grpc_lib::tonic::{Request, Response, Status};
+  |                            ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

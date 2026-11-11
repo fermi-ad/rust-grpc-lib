@@ -1,0 +1,5 @@
+error: a `#[public]` method takes `PublicContext<T>`, not `RequestContext<T>`: nobody is authenticated, so there are no claims to give it
+  --> src/compile_fail_cases/request_context_on_public.rs:20:14
+   |
+20 |         ctx: rust_grpc_lib::auth::RequestContext<String>,
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
