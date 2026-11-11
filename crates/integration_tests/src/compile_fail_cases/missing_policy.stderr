@@ -1,0 +1,11 @@
+error: method `shout` declares no access policy; add `#[roles(..)]` or `#[any_authenticated]` or `#[public]`
+  --> src/compile_fail_cases/missing_policy.rs:32:14
+   |
+32 |     async fn shout(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+   |              ^^^^^
+
+error: method `whisper` declares no access policy; add `#[roles(..)]` or `#[any_authenticated]` or `#[public]`
+  --> src/compile_fail_cases/missing_policy.rs:36:14
+   |
+36 |     async fn whisper(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+   |              ^^^^^^^
