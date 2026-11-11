@@ -1,13 +1,6 @@
-//! File-system helpers used by [`super::generate_protos`].
-//!
-//! Defines three `pub(super)` functions:
-//!
-//! - [`find_proto_files`] — recursively collects all `.proto` file paths
-//!   under a directory.
-//! - [`collect_packages`] — reads the `package` declaration from each file
-//!   and returns a sorted list of package names.
-//! - `extract_package` (private) — parses a single `package …;` line from
-//!   proto file text.
+//! Finds the bundled protos and reads their `package` names for
+//! [`generate_protos`](super::generate_protos). Errors are `String`s, which
+//! `?` turns into the caller's `Box<dyn Error>`.
 
 use std::{
     ffi::OsStr,
@@ -17,8 +10,8 @@ use std::{
 #[cfg(test)]
 mod tests;
 
-/// Recursively find all `.proto` files under `dir` and return their paths as
-/// `String`s.
+/// Returns every file under `dir` (recursively) with extension `proto_ext`,
+/// in unspecified directory-walk order. Fails if a directory cannot be read.
 pub(super) fn find_proto_files(dir: &str, proto_ext: &OsStr) -> Result<Vec<String>, String> {
     let mut files = Vec::new();
     let dir_iterator =
@@ -39,11 +32,8 @@ pub(super) fn find_proto_files(dir: &str, proto_ext: &OsStr) -> Result<Vec<Strin
     Ok(files)
 }
 
-/// Read the `package` declaration from each `.proto` file and return a sorted
-/// list of package names.
-///
-/// Returns an error if any file cannot be read or contains no `package`
-/// declaration.
+/// Returns the `package` name of each file, sorted so that `proto.rs` is
+/// deterministic. Fails if a file cannot be read or has no `package` line.
 pub(super) fn collect_packages(proto_files: &[String]) -> Result<Vec<String>, String> {
     let mut packages = Vec::with_capacity(proto_files.len());
     for path in proto_files {
@@ -57,10 +47,10 @@ pub(super) fn collect_packages(proto_files: &[String]) -> Result<Vec<String>, St
     Ok(packages)
 }
 
-/// Extract the proto `package` declaration from the text of a single `.proto`
-/// file.
-///
-/// Returns `None` if no `package` line is found or the package name is empty.
+// Returns the name from the first `package <name>;` line, or `None` if there is
+// no such line or the name is empty. This is a line-based scan, not a proto
+// parser: it assumes the declaration sits on its own line, which holds for the
+// bundled protos.
 fn extract_package(proto_contents: &str) -> Option<String> {
     proto_contents.lines().find_map(|line| {
         let trimmed = line.trim();
