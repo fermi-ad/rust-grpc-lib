@@ -92,7 +92,7 @@ In 7.7.0, authentication and authorization were wired separately: a JWT layer (`
 
 ### Internal
 
-- `grpc-macro` 0.6.0: the single `lib.rs` is split into `client` (the `GrpcClient` derive) and `service` (`args`, `async_trait_order`, `policy`, `request_param`, `roles`), each with unit tests. `rust-grpc-lib` is a dev-dependency for its doctests only.
+- `grpc-macro` 0.3.0: the single `lib.rs` is split into `client` (the `GrpcClient` derive) and `service` (`args`, `async_trait_order`, `policy`, `request_param`, `roles`), each with unit tests. `rust-grpc-lib` is a dev-dependency for its doctests only.
 - `integration_tests` 0.2.0: `integration_round_trip`, `keycloak_authenticated_service_macro` and `per_service_auth` are replaced by `access_gate` (live-server tests of public methods, rejections that never reach the handler, the header scrub, spans and denial logs, an unlisted method, the conformance helpers, and forwarding through a second in-process server), `access_controlled_service_macro`, `method_name_matching`, `server_builder` and `trace_layer`. A new `trybuild` suite covers every compile error above. The crate now stands in for a minimal consumer: it depends on `rust-grpc-lib` (`test-util`, `server`), `tokio`, `tracing`, `tracing-subscriber` and `trybuild` only.
 - `scripts/gen-test-fixtures.sh` generates the fixtures through `build_support` with the workspace `Cargo.lock`, so they match what consumers get from `generate_protos`.
 
