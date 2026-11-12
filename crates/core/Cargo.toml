@@ -1,37 +1,69 @@
 [package]
 name = "rust-grpc-lib"
-version = "7.7.0"
+version = "8.0.0"
 description = "A library to encapsulate the Fermilab-specific gRPC interface generation and transport logic for Rust projects"
 repository = "https://github.com/fermi-ad/rust-grpc-lib"
 edition = "2024"
+rust-version = "1.88"
 
-# Ship the bundled .proto files so consumers can run code-gen from their own
-# build.rs without knowing about the source files. env!("CARGO_MANIFEST_DIR")
-# inside run_build() resolves to this crate's directory on the consumer's machine.
 include = [
     "src/**/*",
     "interface-definitions/proto/**/*.proto",
 ]
 
 [features]
-default = ["auth"]
-auth = ["dep:rust-auth-lib", "tracing"]
-tracing = ["dep:tracing"]
-build = ["dep:protoc-bin-vendored", "dep:tonic-prost-build"]
+default = []
+build = ["dep:protoc-bin-vendored", "dep:regex", "dep:tonic-prost-build"]
 jwks-url = ["rust-auth-lib/jwks-url"]
-unauthenticated = []
+test-util = [
+    "server",
+    "dep:futures-util",
+    "dep:jsonwebtoken",
+    "dep:serde_json",
+    "dep:tracing-subscriber",
+    "rust-auth-lib/test-fixtures",
+]
+server = [
+    "dep:futures-util",
+    "dep:pin-project-lite",
+    "dep:tonic-health",
+    "dep:tower",
+    "dep:tower-http",
+]
 
 [dependencies]
 grpc-macro = { path = "../grpc_macro" }
-rust-auth-lib = { git = "https://github.com/fermi-ad/rust-auth-lib", tag = "v0.4.0", optional = true }
+rust-auth-lib = { git = "https://github.com/fermi-ad/rust-auth-lib", tag = "v0.4.0" }
 protoc-bin-vendored = { version = "3", optional = true }
 rust-env-var-lib = { git = "https://github.com/fermi-ad/rust-env-var-lib", tag = "v1.2.0" }
 tonic = { version = "0.14", features = ["transport"] }
-tracing = { version = "0.1", optional = true }
+tracing = "0.1"
+tokio = { version = "1", default-features = false, features = ["net"] }
+tonic-health = { version = "0.14", optional = true }
+tonic-prost = "0.14"
+prost = "0.14"
+jsonwebtoken = { version = "11", optional = true }
+serde_json = { version = "1", optional = true }
 tonic-prost-build = { version = "0.14", optional = true }
+regex = { version = "1", optional = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry"], optional = true }
+futures-util = { version = "0.3", default-features = false, optional = true }
+pin-project-lite = { version = "0.2", optional = true }
+tower = { version = "0.5", default-features = false, optional = true }
+tower-http = { version = "0.6", default-features = false, features = ["trace"], optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net"] }
+http-body = "1"
+jsonwebtoken = "11"
+serde_json = "1"
+futures-util = { version = "0.3", default-features = false }
+pin-project-lite = "0.2"
+tower = { version = "0.5", default-features = false, features = ["util"] }
+tower-http = { version = "0.6", default-features = false, features = ["trace"] }
+tracing-subscriber = "0.3"
+tonic-health = "0.14"
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
 protoc-bin-vendored = "3"
 tonic-prost-build = "0.14"
+regex = "1"
 rust-auth-lib = { git = "https://github.com/fermi-ad/rust-auth-lib", tag = "v0.4.0", features = ["test-fixtures"] }
