@@ -4,7 +4,7 @@ See [Concepts](concepts.md) for how the pieces fit. The [service template](https
 
 ## Adding the dependency
 
-The crate is distributed by git tag (`vX.Y.Z`) from the fermi-ad GitHub organization, not crates.io. You need Rust 1.85+ (edition 2024), your own Tokio runtime, and git credentials that can read fermi-ad repositories; if private fetches fail, set `[net] git-fetch-with-cli = true` in `.cargo/config.toml`. Cargo fetches the bundled `.proto` files; there is no submodule to initialize.
+The crate is distributed by git tag (`vX.Y.Z`) from the fermi-ad GitHub organization, not crates.io. You need Rust 1.88+ (the crate's `rust-version`, which Cargo enforces; edition 2024), your own Tokio runtime, and git credentials that can read fermi-ad repositories; if private fetches fail, set `[net] git-fetch-with-cli = true` in `.cargo/config.toml`. Cargo fetches the bundled `.proto` files; there is no submodule to initialize.
 
 To start a new service, use the [service template](https://github.com/fermi-ad/rust-grpc-service-template), which has the dependencies already set up; see its `Cargo.toml` for a full example. No feature is on by default; the feature table (what each enables) is in the [crate docs](https://fermi-ad.github.io/rust-grpc-lib/rust_grpc_lib/index.html#features). A typical service lists `rust-grpc-lib` three times:
 

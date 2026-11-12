@@ -48,6 +48,7 @@ In 7.7.0, authentication and authorization were wired separately: a JWT layer (`
   - `server` (new) enables `GrpcServer`, the contexts, the policy types and the `access_controlled_service`, `roles`, `any_authenticated` and `public` attributes.
   - `test-util` (new) enables `rust_grpc_lib::testing` and the `for_test` constructors, and implies `server`.
   - `build` and `jwks-url` are unchanged.
+- **Minimum Rust version is 1.88**, declared as `rust-version` so Cargo enforces it. The locked versions of `tonic`, `tokio`, `tower` and `syn` require 1.88.
 - **`#[roles]` outside an annotated block is a compile error.** In 7.7.0 it was a silent pass-through that left the method unchecked. `#[any_authenticated]` and `#[public]` behave the same way.
 
 ### Added
