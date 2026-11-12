@@ -47,8 +47,8 @@ The gate strips the `authorization` header on every path, so neither a handler n
 | Token validator | Checks tokens (`TokenValidator`). `KeyValidator` verifies signatures against keys from a JWKS URL (`jwks-url` feature), a JWKS file, a PEM file or a string. |
 | Access policy | `#[roles(any(..))]`, `#[roles(all(..))]`, `#[any_authenticated]` or `#[public]`; exactly one per method. |
 | Policy table | What the macro emits: `ServicePolicy`, read through `PolicyTable`, entries `MethodPolicy` with an `Access`. |
-| Fail closed | When unsure, deny: a method missing from the table gets `PermissionDenied`; a context built without the gate gets `Internal`. |
-| Health | `grpc.health.v1.Health`, served automatically by `GrpcServer` (no `tonic-health` dependency); needs no token. Tests query it with `testing::health_status` / `health_watch`. |
+| Fail closed | When unsure, deny: a method missing from the table gets `PermissionDenied`; a context built without the gate gets `Internal`. (A service the server doesn't serve at all never reaches a gate and gets tonic's `Unimplemented`.) |
+| Health | `grpc.health.v1.Health`, served automatically by `GrpcServer` (no `tonic-health` dependency). It needs no token, so it tells any caller which services the server hosts. Tests query it with `testing::health_status` / `health_watch`. |
 | Conformance check | `assert_policy_table_conforms` (`test-util`) calls a live server to check that it enforces the table. See [testing](testing.md). |
 
 Token expiry is checked once, when a call starts. Long-lived streams and forwarding handlers should re-check `ctx.is_expired()`.

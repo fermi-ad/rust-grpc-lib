@@ -18,6 +18,7 @@ The complete list is under "Compile errors" in the `access_controlled_service` r
 | a `RequestContext` parameter must be a plain binding | Bind it as `ctx` or `mut ctx` |
 | method `getuser` collides with `get_user` | Rename one; the gate ignores case and `_` |
 | `#[roles]` / `#[public]` / `#[any_authenticated]` has no effect here | Put it on a method in an annotated `impl`, or remove it |
+| A policy error on another crate's attribute, such as `#[other_crate::public]` | Inside an annotated block, the macro matches policy attributes by their last path segment. Don't use other crates' attributes named `roles`, `any_authenticated` or `public` on methods in the block |
 | `E0277`: `X` has no access policy for the generated server `FooServer<X>` (at `add_service`) | Annotate the `impl`, or make `server = ..` match the constructor passed to `add_service` |
 | cannot find type `RequestContext` in this scope | Import it from `rust_grpc_lib::auth` and enable the `server` feature |
 | cannot construct `RequestContext<_>` with struct literal syntax | In tests, use `RequestContext::for_test` |
@@ -43,7 +44,9 @@ The complete list is under "Compile errors" in the `access_controlled_service` r
 | Client constructor returns `ChannelError::Runtime` | No Tokio runtime (checked on every call) | Build clients inside `#[tokio::main]` or `#[tokio::test]` |
 | Constructor succeeds, first RPC fails (typically `Unavailable`) | Connections are lazy; only an invalid URI fails at construction | Check the host and port |
 | `PermissionDenied "required role not present"` with a valid token | The token lacks the realm role; client roles never count | Grant the realm role, or change the policy |
-| `PermissionDenied "method not permitted"` | Path not `/<service>/<method>`, or the method is not in the policy table | Check the client's service and the `server = ..` argument |
+| `PermissionDenied "method not permitted"` | Path not `/<service>/<method>`, or the method is not in the policy table (for example, a method produced by a macro invocation inside the block) | Check the client's service and the `server = ..` argument; write the method as a plain `fn` with a policy |
+| `Unimplemented` | The server doesn't serve that service at all, so no gate is reached | Check the endpoint and that the service is added with `add_service` |
+| Error text printed twice in an `anyhow` chain | `ServeError` / `ChannelError` include the inner error in their message and in `source()` | Cosmetic; print with `{}` instead of `{:#}` if it bothers you |
 | `Unauthenticated "missing Authorization header"` | No token, or not `Bearer ` (case-sensitive); for example a `public` client calling a gated method | Use `authenticated`, or `ctx.forward(..)`; see [Generated clients](client.md#generated-clients) |
 | `Internal "authentication is not configured"` | A context was built without the gate: service not served via `add_service`, or a unit test used `Request::new` | Serve via `GrpcServer`; in tests, use `authenticated_request` or `public_request` |
 | Client gets `Cancelled` | The server's `.timeout()` elapsed and the handler was dropped | Raise the timeout or speed up the handler |

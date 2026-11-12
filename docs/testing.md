@@ -2,7 +2,10 @@
 
 See [Concepts](concepts.md) for how the pieces fit. For a runnable service with a test suite, see the [service template](https://github.com/fermi-ad/rust-grpc-service-template).
 
-The helpers live in `rust_grpc_lib::testing` (`test-util` feature, which implies `server`). Enable it in `[dev-dependencies]` only: it ships a publicly known RSA key, and `test_validator` trusts anything signed with it. The module's rustdoc lists every helper.
+The helpers live in `rust_grpc_lib::testing` (`test-util` feature, which implies `server`). The module's rustdoc lists every helper.
+
+> [!WARNING]
+> Enable `test-util` in `[dev-dependencies]` only. It ships a publicly known RSA key, and `test_validator` trusts anything signed with it. Nothing stops a release build from enabling the feature. A server built with `test_validator` in production lets **anyone** authenticate as any user with any role.
 
 Tests need `rust-grpc-lib` with `test-util` in `[dev-dependencies]`, plus `tokio` (for `#[tokio::test]`). Nothing else: tonic types come from `rust_grpc_lib::tonic`, health queries from `testing::health_status` / `health_watch`, and `testing::StreamExt` reads the `Watch` stream, so no `tonic`, `tonic-health` or `futures-util` dependency is needed.
 
@@ -31,6 +34,7 @@ let reply = MyService.my_public_method(public_request(Empty {})).await.unwrap().
 ```
 
 - A plain `Request::new`, or `public_request` passed to an authenticated handler, gives `Internal "authentication is not configured"`.
+- `authenticated_request` carries the literal token `"test-token"`, not a JWT. A handler that forwards `ctx.token()` to a real downstream service therefore sends a token that the downstream rejects with `Unauthenticated`. Test forwarding with a live server (below).
 - `claims_with_roles(sub, roles)` covers the common case; `KeycloakClaimsBuilder` builds custom claims (expiry, issuer, client roles).
 - For logic that takes a context rather than a request, build one with `RequestContext::for_test(claims, msg)` or `PublicContext::for_test(msg)`.
 - Contexts are read-only (no `DerefMut`). To simulate more call details, chain `with_rpc(RpcMethod)`, `with_remote_addr(addr)`, `with_metadata(map)` or `with_extension(value)` onto `for_test`: `PublicContext::for_test(msg).with_metadata(map)`.
@@ -108,10 +112,16 @@ The second argument is the generated constructor, as in `add_service`. It is nev
 
 The check calls every method in the macro-emitted table with an empty message: public methods must not be rejected without a token; every other method must answer `Unauthenticated` with no token and with an invalid one. It panics once, listing every mismatch, and also on an empty table. There is no method list to maintain.
 
+The public check is weak: any status other than `Unauthenticated` or `PermissionDenied` passes, including `Unavailable`. A table with only public methods therefore passes even when the server is unreachable. Check that the server is up first, for example with `health_status(channel.clone(), "")`.
+
 It does not check:
 
 - **The success path or role denial.** Use a real client (above) or `assert_all_rpcs_require_role(channel, &paths, token_without_role)`.
-- **Methods missing from the table.** Nothing at run time lists a tonic server's methods; in practice the compiler closes this gap. For an independent list, use `assert_service_conforms(channel, ExampleDbServer::<ExampleDbService>::new, &["getEndPointOne", ..])`, which must match the table exactly.
+- **Methods missing from the table.** Nothing at run time lists a tonic server's methods. The compiler catches most gaps, because every `fn` in an annotated block needs a policy. But two cases get no row and are caught only at run time, where they fail closed with `PermissionDenied "method not permitted"`:
+  - A non-`fn` item in the block, such as a macro invocation that expands to a method. The macro skips it.
+  - A trait method with a default body that the block doesn't override. The bundled tonic traits have no default bodies, so in practice only the first case applies.
+
+  To catch both, use `assert_service_conforms(channel, ExampleDbServer::<ExampleDbService>::new, &["getEndPointOne", ..])` with an independent list of proto names. The list must match the table exactly.
 - **Whether a public handler runs.** The table holds Rust names; tonic routes by exact proto name and answers `Unimplemented`. `assert_service_conforms` sends proto names.
 
 `assert_all_rpcs_require_auth(channel, &paths)` and `call_rpc(channel, path, token)` take paths such as `/services.example.ExampleDB/getEndPointOne`; build them from the generated `SERVICE_NAME` const. Health and reflection paths are refused.

@@ -25,7 +25,7 @@ Notes:
 - **Do not rename** `rust-grpc-lib` (no `package = ".."`): macro and generated code refer to `::rust_grpc_lib`.
 - **Tracing.** The library emits `tracing` spans and events but never installs a subscriber; the application installs one, usually with `tracing-subscriber` (see [Tracing and logs](#tracing-and-logs)).
 - **TLS.** Do not enable tonic's TLS features or configure TLS settings or certificates: the infra team handles TLS, not this library. Services operate over plaintext, and the library enables only tonic's `transport`.
-- `test-util` ships a publicly known RSA key: `[dev-dependencies]` only.
+- `test-util` ships a publicly known RSA key: `[dev-dependencies]` only. Nothing stops a release build from enabling it, and `test_validator` in production lets anyone authenticate as any user with any role.
 
 ## Generating the protos
 
@@ -93,6 +93,7 @@ Every method declares exactly one policy:
 - Roles are string literals or paths to `&str` constants.
 - `T` is the message, or `rust_grpc_lib::tonic::Streaming<Req>` for client- and bidirectional-streaming RPCs. Bind the context to a plain name (`ctx`, `mut ctx`); a plain `tonic::Request<T>` parameter is a compile error.
 - Policy attributes need no import inside the block; `RequestContext` and `PublicContext` must be in scope.
+- The macro recognizes policy attributes by their last path segment. Any attribute named `roles`, `any_authenticated` or `public` inside the block, such as an unrelated `#[other_crate::public]`, is treated as a policy and removed. Don't use other crates' attributes with these names on methods in an annotated block.
 - Wire names match ignoring case, `_` and `r#` (`get_end_point_one` matches `getEndPointOne`); two methods that collide this way are a compile error.
 - If `FooServer` cannot be derived from the trait path, write `#[access_controlled_service(server = path::to::FooServer)]` (no generics).
 
@@ -119,6 +120,7 @@ Events logged in a handler land in the `rpc` span. For spawned tasks, wrap the f
 
 | Situation | Status |
 |---|---|
+| Service not served by this server (no gate is reached) | `Unimplemented` (from tonic) |
 | Path is not `/<service>/<method>`, or the method is not in the policy table | `PermissionDenied "method not permitted"` (logged at `error`) |
 | No `authorization` header, or not `Bearer ` (case-sensitive) | `Unauthenticated "missing Authorization header"` |
 | Invalid or expired token | `Unauthenticated` (the validator's message) |
@@ -141,7 +143,8 @@ GrpcServer::builder(validator)                 // Arc<impl TokenValidator>
 - `add_service` accepts only `#[access_controlled_service]` implementations whose `server` matches the constructor; anything else is a compile error.
 - `.timeout(d)` drops the handler at the deadline and the client gets `Cancelled`; a shorter client `grpc-timeout` still wins.
 - `serve(addr)` returns `Result<Infallible, ServeError>` (it never returns `Ok`), and `serve_with_shutdown(addr, fut)` and `serve_on_listener(listener, fut)` (your `TcpListener`; bind port 0 in tests) return `Result<(), ServeError>`. `serve_on_listener` has no bind step, so it never returns `ServeError::Bind`. See the `rust_grpc_lib::server` rustdoc.
-- **Health.** `GrpcServer` serves `grpc.health.v1.Health` automatically; you add no `tonic-health` dependency and register nothing. It needs no token. `""` and every added service report `Serving` at startup and `NotServing` as soon as the shutdown future completes, before draining. Open streams, including health `Watch`, delay shutdown. Tests query it with `testing::health_status` / `health_watch` (see [Testing](testing.md#health-checks)).
+- `ServeError` and `ChannelError` include the inner error in their `Display` text and also return it from `source()`. Reporters that print the whole chain, such as `anyhow`'s `{:#}` or `{:?}`, therefore show the inner error twice.
+- **Health.** `GrpcServer` serves `grpc.health.v1.Health` automatically; you add no `tonic-health` dependency and register nothing. It needs no token, so **any unauthenticated caller can learn which services the server hosts** by checking their names. Don't put anything sensitive in a service name. `""` and every added service report `Serving` at startup and `NotServing` as soon as the shutdown future completes, before draining. Open streams, including health `Watch`, delay shutdown. Tests query it with `testing::health_status` / `health_watch` (see [Testing](testing.md#health-checks)).
 - **Inspecting policies.** `PolicyTable::for_service(ExampleDbServer::<ExampleDbService>::new)` (the constructor is never called; it names the types, as in `add_service`) offers `.policies()` and `.lookup("getEndPointOne")`, for example to log routes at startup.
 
 ## Environment variables
