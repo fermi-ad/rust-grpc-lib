@@ -26,15 +26,13 @@ const LOG_TARGET: &str = "rust_grpc_lib::telemetry";
 pub struct TelemetryConfig {
     endpoint: Option<String>,
     sdk_disabled: bool,
-    export_interval: Duration,
-    service_name: String,
-    service_version: Option<String>,
-    duration_buckets: Vec<f64>,
+    pub(super) export_interval: Duration,
+    pub(super) service_name: String,
+    pub(super) service_version: Option<String>,
+    pub(super) duration_buckets: Vec<f64>,
     runtime_probe: bool,
 }
 
-// C3 consumes the resolved export mode when it installs the meter provider.
-#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ExportMode<'a> {
     Disabled,
@@ -132,8 +130,6 @@ impl TelemetryConfig {
         self
     }
 
-    // C3 consumes this when creating the meter provider.
-    #[allow(dead_code)]
     pub(super) fn export_mode(&self) -> ExportMode<'_> {
         if self.sdk_disabled {
             ExportMode::Disabled
