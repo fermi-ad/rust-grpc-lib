@@ -4,6 +4,21 @@
 //! setters to override them. Use [`TelemetryConfig::default`] to start without
 //! reading configuration from the environment. Each enabled [`Telemetry`]
 //! owns a provider; cloning shares that provider without installing it globally.
+//!
+//! Both `rpc.server.call.duration` and `rpc.server.active_requests` use
+//! `rpc.system.name = "grpc"` and the canonical `package.Service/Method` as
+//! `rpc.method` (`_OTHER` for unlisted paths). The duration histogram measures
+//! seconds and deliberately uses a numeric `rpc.response.status_code` and,
+//! for non-OK codes only, tonic's code name (such as `PermissionDenied`) as
+//! `error.type`, rather than the string conventions in OpenTelemetry v1.37.
+//! The existing `rpc` trace span is unchanged: it uses `rpc.system`, a separate
+//! `rpc.service`, the method segment alone as `rpc.method`, and `grpc.status`
+//! with tonic's debug name (such as `Ok`).
+//!
+//! A call completion observer receives a [`CallSummary`] exactly once per
+//! tracked call, including cancellations. It runs on the serving path after
+//! the built-in metrics are recorded, so it must be cheap and non-blocking.
+//! Observer panics are caught and logged without changing the call outcome.
 
 use std::sync::{Arc, Mutex};
 
@@ -27,10 +42,14 @@ mod exporter;
 pub(crate) mod label;
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod layer;
+// The builder will install the recorder together with the call layer.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod recorder;
 #[cfg(test)]
 mod tests;
 
 pub use buckets::DEFAULT_DURATION_BUCKETS;
+pub use call::CallSummary;
 pub use config::TelemetryConfig;
 pub use opentelemetry;
 
