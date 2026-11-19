@@ -53,8 +53,8 @@ In 7.7.0, authentication and authorization were wired separately: a JWT layer (`
 
 ### Added
 
-- **`GrpcServer`** (`server`): `GrpcServer::builder(validator)`, `.timeout(duration)`, `.add_service(FooServer::new, my_impl)`, and three serve methods that share the `#[non_exhaustive]` error `ServeError` (`Bind`, `Transport`):
-  - `serve(addr) -> Result<Infallible, ServeError>` runs until the server fails.
+- **`GrpcServer`** (`server`): `GrpcServer::builder(validator)`, `.timeout(duration)`, `.add_service(FooServer::new, my_impl)`, and three serve methods that share the `#[non_exhaustive]` error `ServeError`:
+  - `serve(addr) -> Result<(), ServeError>` drains on SIGTERM/SIGINT on Unix or Ctrl-C on Windows and returns `Ok(())` after the drain. Signal registration failures return `ServeError::Signal`. `.without_signal_handling()` disables automatic shutdown signals for this method only.
   - `serve_with_shutdown(addr, signal) -> Result<(), ServeError>` drains gracefully once `signal` completes.
   - `serve_on_listener(listener, signal) -> Result<(), ServeError>` serves on a listener you bound (useful in tests with port `0`); it never returns `ServeError::Bind`.
 - **Health is built in.** Every `GrpcServer` serves `grpc.health.v1.Health` without a token. The overall service (`""`) and every added service report `Serving` once the server starts, and `NotServing` as soon as the shutdown signal fires, before the drain. A consumer no longer needs `tonic-health`.
@@ -133,7 +133,7 @@ In 7.7.0, authentication and authorization were wired separately: a JWT layer (`
        .serve(addr)
        .await?;
    ```
-   `validator` is an `Arc<impl TokenValidator>`, for example `Arc::new(KeyValidator::new(config)?)`. Health is added and reported for you; drop your `health_reporter` and `set_serving` calls. A global `Server::builder().layer(validator_into_layer(..))` is replaced the same way. Use `serve_with_shutdown(addr, signal)` for a graceful drain.
+   `validator` is an `Arc<impl TokenValidator>`, for example `Arc::new(KeyValidator::new(config)?)`. Health is added and reported for you; drop your `health_reporter` and `set_serving` calls. A global `Server::builder().layer(validator_into_layer(..))` is replaced the same way. Use `serve_with_shutdown(addr, signal)` to supply your own shutdown trigger, or `server::shutdown_signal()` to wait for the default signals in your own shutdown logic.
 7. **Forward credentials with the context.** Replace `extract_token(&request)?` with `ctx.token()`, for example `FooClient::authenticated(url, ctx.token())?`. To pass the caller's message and token on, use `downstream.call(ctx.into_forwarded())`, or `ctx.forward(other_message)` for a different message.
 8. **Rename the client constructors.** `FooClient::from_endpoint_with_provider(url, provider)` becomes `FooClient::authenticated(url, provider)`, and `FooClient::from_endpoint(url)` becomes `FooClient::public(url)`. Delete any hand-written `#[derive(GrpcNoAuthClient)]`. Both constructors (and `pool::get_channel`) return `Result<_, pool::ChannelError>`: `?` into `Box<dyn Error>` keeps working, but code that named or matched `tonic::transport::Error` for these calls uses `ChannelError` (an invalid endpoint is `ChannelError::Transport`). A type spelled `FooClient<InterceptedService<Channel, ClientJwtInterceptor<P>>>` can become `FooClient<AuthenticatedClient<P>>`. If an RPC's snake_case name is `public` or `authenticated`, rename it in the `.proto` file.
    - Build every client inside a Tokio runtime, even for an endpoint that is already pooled; outside one, the call now returns `ChannelError::Runtime`.

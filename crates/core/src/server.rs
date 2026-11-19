@@ -34,7 +34,7 @@
 //! `docs/server.md` covers policies, gate status codes and log filtering.
 //!
 //! ```rust,no_run
-//! # use std::{future::Future, sync::Arc, time::Duration};
+//! # use std::{sync::Arc, time::Duration};
 //! # use rust_grpc_lib::__private::WireMethods;
 //! # use rust_grpc_lib::auth::{ServicePolicy, TokenValidator};
 //! # use rust_grpc_lib::server::{GrpcServer, GrpcService, ServeError};
@@ -42,13 +42,12 @@
 //! #     validator: Arc<V>,
 //! #     new_server: fn(T) -> S,
 //! #     my_impl: T,
-//! #     shutdown: impl Future<Output = ()>,
 //! # ) -> Result<(), ServeError> {
 //! // `new_server` is a generated constructor such as `FooServer::new`.
 //! GrpcServer::builder(validator)
 //!     .timeout(Duration::from_secs(30))
 //!     .add_service(new_server, my_impl)
-//!     .serve_with_shutdown("0.0.0.0:50051".parse().unwrap(), shutdown)
+//!     .serve("0.0.0.0:50051".parse().unwrap())
 //!     .await
 //! # }
 //! ```
@@ -57,9 +56,9 @@
 //!
 //! | Method | Returns | Notes |
 //! |---|---|---|
-//! | [`serve`](GrpcServerBuilder::serve) | `Result<Infallible, ServeError>` | Binds; never returns `Ok` |
-//! | [`serve_with_shutdown`](GrpcServerBuilder::serve_with_shutdown) | `Result<(), ServeError>` | Binds; `Ok(())` after graceful shutdown |
-//! | [`serve_on_listener`](GrpcServerBuilder::serve_on_listener) | `Result<(), ServeError>` | Your listener; never `ServeError::Bind` |
+//! | [`serve`](GrpcServerBuilder::serve) | `Result<(), ServeError>` | Binds; drains on SIGTERM/SIGINT (Unix) or Ctrl-C (Windows) by default |
+//! | [`serve_with_shutdown`](GrpcServerBuilder::serve_with_shutdown) | `Result<(), ServeError>` | Binds; uses your shutdown future |
+//! | [`serve_on_listener`](GrpcServerBuilder::serve_on_listener) | `Result<(), ServeError>` | Uses your listener and shutdown future |
 //!
 //! All three return [`ServeError`], so `?` unifies them in one function.
 
@@ -99,8 +98,11 @@ use crate::telemetry::{
 };
 use crate::trace::GrpcTraceLayer;
 
+mod shutdown;
 #[cfg(test)]
 mod tests;
+
+pub use shutdown::shutdown_signal;
 
 /// The bounds a tonic service needs to be served, such as a generated
 /// `FooServer<T>`. Blanket-implemented; never implement it by hand.
@@ -152,6 +154,7 @@ impl GrpcServer {
             telemetry: TelemetrySource::Auto(None),
             automatic_telemetry: OnceLock::new(),
             on_call: None,
+            handle_signals: true,
         }
     }
 }
@@ -173,6 +176,7 @@ pub struct GrpcServerBuilder<V> {
     telemetry: TelemetrySource,
     automatic_telemetry: OnceLock<Telemetry>,
     on_call: Option<OnCall>,
+    handle_signals: bool,
 }
 
 enum TelemetrySource {
@@ -270,27 +274,53 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
         self
     }
 
-    /// Serves on `addr` until the server fails.
+    /// Disable process signal handling for [`Self::serve`]. The server then
+    /// runs until it fails or its future is dropped. This does not affect
+    /// [`Self::serve_with_shutdown`] or [`Self::serve_on_listener`].
+    #[must_use = "this consumes the builder and returns an updated one; the signal opt-out is lost if the result is dropped"]
+    pub fn without_signal_handling(mut self) -> Self {
+        self.handle_signals = false;
+        self
+    }
+
+    /// Serves on `addr`, then returns `Ok(())` after a graceful drain.
     ///
-    /// The success type is [`Infallible`], so `serve(addr).await?` needs no
-    /// further handling and `let Err(err) = serve(addr).await;` is
-    /// exhaustive.
+    /// By default this registers process handlers before binding and starts
+    /// draining on SIGTERM or SIGINT on Unix, or Ctrl-C on Windows. See
+    /// [`shutdown_signal`] for the process-wide effects of registration. Use
+    /// [`Self::without_signal_handling`] to serve without registering handlers.
     ///
     /// # Errors
     ///
-    /// [`ServeError::Bind`] if `addr` cannot be bound (for example, the port
-    /// is in use); [`ServeError::Transport`] if the transport fails.
-    pub async fn serve(self, addr: SocketAddr) -> Result<Infallible, ServeError> {
-        match self.serve_with_shutdown(addr, pending()).await {
-            // `pending()` never completes, so the server cannot return `Ok`.
-            Ok(()) => unreachable!("the shutdown future passed to `serve` never completes"),
-            Err(err) => Err(err),
+    /// [`ServeError::Signal`] if signal handlers cannot be registered;
+    /// [`ServeError::Bind`] if `addr` cannot be bound; [`ServeError::Transport`]
+    /// if the transport fails.
+    ///
+    /// # Panics
+    ///
+    /// Requires a Tokio runtime with I/O enabled (`enable_all()` is sufficient).
+    pub async fn serve(self, addr: SocketAddr) -> Result<(), ServeError> {
+        self.serve_with_signal_source(addr, shutdown::register)
+            .await
+    }
+
+    async fn serve_with_signal_source<F: Future<Output = ()>>(
+        self,
+        addr: SocketAddr,
+        register: impl FnOnce() -> io::Result<F>,
+    ) -> Result<(), ServeError> {
+        if self.handle_signals {
+            let shutdown = register().map_err(ServeError::Signal)?;
+            self.serve_with_shutdown(addr, shutdown).await
+        } else {
+            self.serve_with_shutdown(addr, pending()).await
         }
     }
 
-    /// Serves on `addr` until `shutdown` completes (for example
-    /// `tokio::signal::ctrl_c()` or a cancellation token's `cancelled()`),
-    /// then drains gracefully.
+    /// Serves on `addr` until `shutdown` completes, then drains gracefully.
+    /// Only the supplied future triggers shutdown; this method does not
+    /// register process handlers. See [`shutdown_signal`] if you want to wait
+    /// for the same signals as [`Self::serve`] in your own shutdown logic.
     ///
     /// Health flips to `NotServing` before the drain, so load balancers stop
     /// sending traffic while in-flight RPCs finish. Open streams, including
@@ -298,7 +328,8 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
     ///
     /// # Errors
     ///
-    /// As for [`serve`](Self::serve). A completed shutdown returns `Ok(())`.
+    /// [`ServeError::Bind`] if `addr` cannot be bound; [`ServeError::Transport`]
+    /// if the transport fails. A completed shutdown returns `Ok(())`.
     pub async fn serve_with_shutdown(
         self,
         addr: SocketAddr,
@@ -311,7 +342,8 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
     }
 
     /// [`serve_with_shutdown`](Self::serve_with_shutdown) on a listener you
-    /// already bound. In tests, bind port `0` and read `local_addr()` first.
+    /// already bound, with only the caller's shutdown future. In tests, bind
+    /// port `0` and read `local_addr()` first.
     ///
     /// # Errors
     ///
@@ -421,12 +453,15 @@ impl TelemetrySource {
 
 /// Why a server failed to start or stopped abnormally.
 ///
-/// `#[non_exhaustive]`: match with a wildcard arm.
+/// `#[non_exhaustive]`: match with a wildcard arm. Only
+/// [`GrpcServerBuilder::serve`] can return [`Self::Signal`].
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ServeError {
     /// The listen address could not be bound.
     Bind(io::Error),
+    /// The default process signal handlers could not be registered.
+    Signal(io::Error),
     /// The transport failed while serving.
     Transport(TransportError),
 }
@@ -434,7 +469,7 @@ pub enum ServeError {
 impl Error for ServeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Bind(source) => Some(source),
+            Self::Bind(source) | Self::Signal(source) => Some(source),
             Self::Transport(source) => Some(source),
         }
     }
@@ -450,6 +485,12 @@ impl fmt::Display for ServeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Bind(source) => write!(f, "failed to bind the listen address: {source}"),
+            Self::Signal(source) => {
+                write!(
+                    f,
+                    "failed to register the shutdown signal handlers: {source}"
+                )
+            }
             Self::Transport(source) => write!(f, "gRPC transport error: {source}"),
         }
     }

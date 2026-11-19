@@ -170,8 +170,7 @@ async fn serving_on_an_occupied_port_is_a_bind_error() {
     let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = occupied.local_addr().unwrap();
 
-    // `Ok` is `Infallible`, so this pattern is irrefutable.
-    let Err(err) = builder().serve(addr).await;
+    let err = builder().serve(addr).await.unwrap_err();
 
     assert!(matches!(err, ServeError::Bind(_)), "{err:?}");
 }

@@ -136,13 +136,14 @@ The gate removes the `authorization` header from every call, including public ca
 GrpcServer::builder(validator)                 // Arc<impl TokenValidator>
     .timeout(Duration::from_secs(30))          // optional; none by default
     .add_service(ExampleDbServer::new, ExampleDbService)
-    .serve_with_shutdown(addr, async { let _ = tokio::signal::ctrl_c().await; })
+    .serve(addr)
     .await?;
 ```
 
 - `add_service` accepts only `#[access_controlled_service]` implementations whose `server` matches the constructor; anything else is a compile error.
 - `.timeout(d)` drops the handler at the deadline and the client gets `Cancelled`; a shorter client `grpc-timeout` still wins.
-- `serve(addr)` returns `Result<Infallible, ServeError>` (it never returns `Ok`), and `serve_with_shutdown(addr, fut)` and `serve_on_listener(listener, fut)` (your `TcpListener`; bind port 0 in tests) return `Result<(), ServeError>`. `serve_on_listener` has no bind step, so it never returns `ServeError::Bind`. See the `rust_grpc_lib::server` rustdoc.
+- `serve(addr)` returns `Result<(), ServeError>`. It registers handlers before binding and returns `Ok(())` after draining on SIGTERM or SIGINT on Unix, or Ctrl-C on Windows. Registration errors return `ServeError::Signal`. Use a Tokio runtime with I/O enabled (`enable_all()` suffices). On Unix, Tokio's handlers replace the default signal behavior for the lifetime of the process. `.without_signal_handling()` opts out; the server then runs until it fails or the serve future is dropped.
+- `serve_with_shutdown(addr, fut)` and `serve_on_listener(listener, fut)` use only your shutdown future and do not register their own handlers. Both return `Result<(), ServeError>`; the latter uses your `TcpListener` (bind port 0 in tests) and never returns `ServeError::Bind`. Use the fallible `rust_grpc_lib::server::shutdown_signal()` helper to wait for the same process signals in caller-owned shutdown logic.
 - `ServeError` and `ChannelError` include the inner error in their `Display` text and also return it from `source()`. Reporters that print the whole chain, such as `anyhow`'s `{:#}` or `{:?}`, therefore show the inner error twice.
 - **Health.** `GrpcServer` serves `grpc.health.v1.Health` automatically; you add no `tonic-health` dependency and register nothing. It needs no token, so **any unauthenticated caller can learn which services the server hosts** by checking their names. Don't put anything sensitive in a service name. `""` and every added service report `Serving` at startup and `NotServing` as soon as the shutdown future completes, before draining. Open streams, including health `Watch`, delay shutdown. Tests query it with `testing::health_status` / `health_watch` (see [Testing](testing.md#health-checks)).
 - **Inspecting policies.** `PolicyTable::for_service(ExampleDbServer::<ExampleDbService>::new)` (the constructor is never called; it names the types, as in `add_service`) offers `.policies()` and `.lookup("getEndPointOne")`, for example to log routes at startup.

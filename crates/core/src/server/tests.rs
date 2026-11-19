@@ -82,6 +82,76 @@ async fn status_of(reporter: &HealthReporter, name: &str) -> WireStatus {
 }
 
 #[tokio::test]
+async fn injected_signal_marks_health_not_serving_and_drains() {
+    let builder = GrpcServer::builder(test_validator(KID)).without_telemetry();
+    let health = builder.health.clone();
+    let addr = "127.0.0.1:0".parse().unwrap();
+    let (send, receive) = oneshot::channel();
+    let serve = builder.serve_with_signal_source(addr, || Ok(async { receive.await.unwrap() }));
+    tokio::pin!(serve);
+
+    // Poll once to start serving before checking health and sending the signal.
+    tokio::select! {
+        biased;
+        result = &mut serve => panic!("server returned before shutdown: {result:?}"),
+        () = std::future::ready(()) => {}
+    }
+    assert_eq!(status_of(&health, "").await, WireStatus::Serving);
+
+    send.send(()).unwrap();
+    timeout(Duration::from_secs(5), serve)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status_of(&health, "").await, WireStatus::NotServing);
+}
+
+#[tokio::test]
+async fn registration_error_is_returned_before_binding() {
+    let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let err = GrpcServer::builder(test_validator(KID))
+        .serve_with_signal_source(occupied.local_addr().unwrap(), || {
+            Err::<std::future::Pending<()>, _>(io::Error::other("registration failed"))
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, ServeError::Signal(_)), "{err:?}");
+    assert_eq!(err.source().unwrap().to_string(), "registration failed");
+    assert_eq!(
+        err.to_string(),
+        "failed to register the shutdown signal handlers: registration failed"
+    );
+}
+
+#[tokio::test]
+async fn signal_opt_out_skips_registration_and_keeps_serving() {
+    let builder = GrpcServer::builder(test_validator(KID))
+        .without_telemetry()
+        .without_signal_handling();
+    let addr = "127.0.0.1:0".parse().unwrap();
+    let result = timeout(
+        Duration::from_millis(100),
+        builder.serve_with_signal_source(addr, || -> io::Result<std::future::Pending<()>> {
+            panic!("opt-out must not register a signal listener")
+        }),
+    )
+    .await;
+    assert!(result.is_err(), "serve unexpectedly returned: {result:?}");
+}
+
+#[tokio::test]
+async fn signal_opt_out_still_returns_bind_errors() {
+    let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let err = GrpcServer::builder(test_validator(KID))
+        .without_signal_handling()
+        .serve(occupied.local_addr().unwrap())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ServeError::Bind(_)), "{err:?}");
+}
+
+#[tokio::test]
 async fn set_status_updates_the_overall_service_and_every_listed_service() {
     let (reporter, _service) = health_reporter();
 
