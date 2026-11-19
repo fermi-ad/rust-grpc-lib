@@ -2,8 +2,10 @@
 //! tracing, an optional timeout and graceful shutdown (`server` feature).
 //!
 //! [`GrpcServer::builder`] is the only way to serve services with this crate.
-//! Each RPC passes through the trace layer (outermost), then the service's
-//! gate, then the generated server.
+//! Each RPC passes through telemetry (outermost), tracing, then the service's
+//! gate and generated server. Health has no gate. Use
+//! [`without_telemetry`](GrpcServerBuilder::without_telemetry) to remove the
+//! telemetry layer without changing tracing or access control.
 //!
 //! - **Access control.** [`add_service`](GrpcServerBuilder::add_service)
 //!   only accepts implementations annotated with
@@ -67,9 +69,10 @@ use std::fmt;
 use std::future::{Future, pending};
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use opentelemetry::metrics::Meter;
 use tokio::net::TcpListener;
 use tonic::body::Body;
 use tonic::codegen::Service;
@@ -80,11 +83,20 @@ use tonic::transport::server::TcpIncoming;
 use tonic::transport::{Error as TransportError, Server};
 use tonic_health::ServingStatus;
 use tonic_health::server::{HealthReporter, health_reporter};
+use tower::{
+    ServiceBuilder,
+    util::{Either, MapResponseLayer},
+};
 
 use crate::__private::WireMethods;
 use crate::auth::gate::AuthGate;
 use crate::auth::{PolicyTable, ServicePolicy, TokenValidator};
-use crate::telemetry::label::{LabelIndex, MethodLabels};
+use crate::telemetry::{
+    CallSummary, Telemetry, TelemetryConfig,
+    label::{LabelIndex, MethodLabels},
+    layer::CallLayer,
+    recorder::{OnCall, Recorder},
+};
 use crate::trace::GrpcTraceLayer;
 
 #[cfg(test)]
@@ -124,6 +136,9 @@ pub struct GrpcServer;
 
 impl GrpcServer {
     /// Starts a builder that authenticates calls with `validator`.
+    ///
+    /// No Tokio runtime is needed to build or get the meter. Automatic
+    /// telemetry starts lazily on the first meter access or when serving.
     #[must_use = "a builder does nothing until services are added and `serve*` is called"]
     pub fn builder<V: TokenValidator>(validator: Arc<V>) -> GrpcServerBuilder<V> {
         let (reporter, health_service) = health_reporter();
@@ -134,11 +149,20 @@ impl GrpcServer {
             health: reporter,
             served: Vec::new(),
             labels: LabelIndex::new(),
+            telemetry: TelemetrySource::Auto(None),
+            automatic_telemetry: OnceLock::new(),
+            on_call: None,
         }
     }
 }
 
 /// Configures and runs a server; created by [`GrpcServer::builder`].
+///
+/// By default telemetry reads the environment. SDK disablement, no endpoint,
+/// or exporter setup failure leaves call tracking on with a no-op meter.
+/// When the server owns telemetry, it flushes after graceful drain or a
+/// transport error, waiting up to five seconds. An outer timeout that drops
+/// the serve future can prevent this awaited flush.
 pub struct GrpcServerBuilder<V> {
     validator: Arc<V>,
     timeout: Option<Duration>,
@@ -146,9 +170,64 @@ pub struct GrpcServerBuilder<V> {
     health: HealthReporter,
     served: Vec<&'static str>,
     labels: LabelIndex,
+    telemetry: TelemetrySource,
+    automatic_telemetry: OnceLock<Telemetry>,
+    on_call: Option<OnCall>,
+}
+
+enum TelemetrySource {
+    Auto(Option<TelemetryConfig>),
+    Shared(Telemetry),
+    Off,
 }
 
 impl<V: TokenValidator> GrpcServerBuilder<V> {
+    /// Use caller-owned telemetry. The server never shuts it down; the caller
+    /// must call [`Telemetry::shutdown`] after all users have finished.
+    ///
+    /// The last telemetry selection wins. Select it before creating
+    /// instruments with [`Self::meter`]; existing instruments are not moved.
+    #[must_use = "this consumes the builder and returns an updated one; the telemetry selection is lost if the result is dropped"]
+    pub fn telemetry(self, telemetry: &Telemetry) -> Self {
+        self.with_telemetry_source(TelemetrySource::Shared(telemetry.clone()))
+    }
+
+    /// Set the resolved configuration for server-owned telemetry instead of
+    /// using [`TelemetryConfig::from_env`] by default.
+    ///
+    /// The last telemetry selection wins. Select it before creating
+    /// instruments with [`Self::meter`]; existing instruments are not moved.
+    #[must_use = "this consumes the builder and returns an updated one; the telemetry config is lost if the result is dropped"]
+    pub fn telemetry_config(self, config: TelemetryConfig) -> Self {
+        self.with_telemetry_source(TelemetrySource::Auto(Some(config)))
+    }
+
+    /// Remove the telemetry layer, including call observation, and use a
+    /// no-op meter. The last telemetry selection wins.
+    #[must_use = "this consumes the builder and returns an updated one; the telemetry opt-out is lost if the result is dropped"]
+    pub fn without_telemetry(self) -> Self {
+        self.with_telemetry_source(TelemetrySource::Off)
+    }
+
+    /// Get the server's meter to create instruments before serving. No Tokio
+    /// runtime is required. Returns a no-op meter when metrics are disabled.
+    #[must_use = "use the returned meter to create instruments"]
+    pub fn meter(&self) -> Meter {
+        self.telemetry
+            .resolve(&self.automatic_telemetry)
+            .map_or_else(Telemetry::noop_meter, Telemetry::meter)
+    }
+
+    /// Observe each finished call, even with a no-op meter, unless the layer
+    /// is removed with [`Self::without_telemetry`]. Replaces any prior observer.
+    /// The callback runs on the serving path; keep it cheap and non-blocking.
+    /// Panics are caught and logged without affecting the RPC.
+    #[must_use = "this consumes the builder and returns an updated one; the call observer is lost if the result is dropped"]
+    pub fn on_call(mut self, f: impl Fn(&CallSummary) + Send + Sync + 'static) -> Self {
+        self.on_call = Some(Arc::new(f));
+        self
+    }
+
     /// Fails any RPC that takes longer than `timeout` to produce a response.
     ///
     /// The handler is dropped at the deadline and the client gets
@@ -249,6 +328,19 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
             .map_err(ServeError::Transport)
     }
 
+    fn with_telemetry_source(mut self, source: TelemetrySource) -> Self {
+        self.telemetry = source;
+        self.automatic_telemetry = OnceLock::new();
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_automatic_test_telemetry(mut self, telemetry: Telemetry) -> Self {
+        self.telemetry = TelemetrySource::Auto(None);
+        self.automatic_telemetry = OnceLock::from(telemetry);
+        self
+    }
+
     async fn run(
         self,
         incoming: TcpIncoming,
@@ -259,8 +351,13 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
             routes,
             health,
             served,
+            labels,
+            telemetry,
+            automatic_telemetry,
+            on_call,
             ..
         } = self;
+        let metrics = telemetry.call_layer(&automatic_telemetry, labels, on_call);
 
         set_status(&health, &served, ServingStatus::Serving).await;
         // Flip health before the graceful drain begins so probes see
@@ -274,16 +371,54 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
         if let Some(timeout) = timeout {
             server = server.timeout(timeout);
         }
-        // Layers wrap every service, so the trace layer goes first to be
-        // outermost, and layers must be applied before `add_routes`. The gate
-        // sits inside it, so rejections are traced too. Health is not behind
-        // a gate but is still traced.
-        let router = server.layer(GrpcTraceLayer::new()).add_routes(routes);
+        // First applied is outermost: telemetry -> trace -> routes/gate.
+        // Both layers see gate rejections, unknown paths, and ungated health.
+        // Normalize the different response bodies so both Either branches
+        // have the same response type; the off branch does not track calls.
+        let layer = match metrics {
+            Some(metrics) => Either::Left(
+                ServiceBuilder::new()
+                    .map_response(|response: Response<_>| response.map(Body::new))
+                    .layer(metrics)
+                    .into_inner(),
+            ),
+            None => Either::Right(MapResponseLayer::new(|response: Response<_>| {
+                response.map(Body::new)
+            })),
+        };
+        let router = server
+            .layer(layer)
+            .layer(GrpcTraceLayer::new())
+            .add_routes(routes);
 
-        router
+        let result = router
             .serve_with_incoming_shutdown(incoming.with_nodelay(Some(true)), signal)
-            .await?;
-        Ok(())
+            .await;
+        finish_serving(result, automatic_telemetry.into_inner()).await
+    }
+}
+
+impl TelemetrySource {
+    fn resolve<'a>(&'a self, automatic: &'a OnceLock<Telemetry>) -> Option<&'a Telemetry> {
+        match self {
+            Self::Auto(config) => Some(automatic.get_or_init(|| {
+                config
+                    .clone()
+                    .map_or_else(Telemetry::from_env, Telemetry::start)
+            })),
+            Self::Shared(telemetry) => Some(telemetry),
+            Self::Off => None,
+        }
+    }
+
+    fn call_layer(
+        &self,
+        automatic: &OnceLock<Telemetry>,
+        labels: LabelIndex,
+        on_call: Option<OnCall>,
+    ) -> Option<CallLayer<Recorder>> {
+        self.resolve(automatic)
+            .map(|telemetry| CallLayer::recording(telemetry, labels, on_call))
     }
 }
 
@@ -321,6 +456,17 @@ impl fmt::Display for ServeError {
             Self::Transport(source) => write!(f, "gRPC transport error: {source}"),
         }
     }
+}
+
+// Flush only the server-owned instance, regardless of the transport outcome.
+async fn finish_serving(
+    result: Result<(), TransportError>,
+    automatic_telemetry: Option<Telemetry>,
+) -> Result<(), TransportError> {
+    if let Some(telemetry) = automatic_telemetry {
+        telemetry.shutdown().await;
+    }
+    result
 }
 
 // Sets the overall service (`""`) and every added service to `status`.

@@ -1,5 +1,5 @@
-//! `GrpcServer`'s outermost layer: opens the `rpc` span per request and holds
-//! it until the response body ends. Fields and target: [`crate::server`];
+//! `GrpcServer`'s trace layer: opens the `rpc` span per request and holds it
+//! until the response body ends. Fields and target: [`crate::server`];
 //! field names live in [`RpcSpan`].
 //!
 //! Inserts the [`RpcSpan`] and, if the path parses, the

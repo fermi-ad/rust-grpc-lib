@@ -34,16 +34,11 @@ use opentelemetry_sdk::{
 use self::{buckets::validate_buckets, config::ExportMode, exporter::ShutdownRequest};
 
 mod buckets;
-// Call tracking is not installed until the builder integration chunk.
-#[cfg_attr(not(test), allow(dead_code))]
 mod call;
 mod config;
 mod exporter;
 pub(crate) mod label;
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod layer;
-// The builder will install the recorder together with the call layer.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod recorder;
 #[cfg(test)]
 mod tests;
@@ -189,8 +184,12 @@ impl Telemetry {
         }
     }
 
+    pub(crate) fn noop_meter() -> Meter {
+        NoopMeterProvider::new().meter(METER_NAME)
+    }
+
     fn noop(bounds: Vec<f64>) -> Self {
-        Self::new(NoopMeterProvider::new().meter(METER_NAME), bounds, None)
+        Self::new(Self::noop_meter(), bounds, None)
     }
 
     fn new(meter: Meter, bounds: Vec<f64>, shutdown: Option<ShutdownRequest>) -> Self {

@@ -62,15 +62,12 @@ impl LabelIndex {
     }
 
     /// The complete set of static labels known at layer construction.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn methods(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.labels.values().copied()
     }
 
     /// Resolve an exact URI path. The label always comes from the index, not
     /// from the request. Unlisted paths return `None` (reported as `_OTHER`).
-    // The telemetry layer will use this when it is installed on the server.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn resolve(&self, path: &str) -> Option<&'static str> {
         self.labels.get(path.strip_prefix('/')?).copied()
     }
