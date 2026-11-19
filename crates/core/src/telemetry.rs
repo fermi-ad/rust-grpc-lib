@@ -4,6 +4,16 @@
 //! setters to override them. Use [`TelemetryConfig::default`] to start without
 //! reading configuration from the environment. Each enabled [`Telemetry`]
 //! owns a provider; cloning shares that provider without installing it globally.
+//! Export uses OTLP/HTTP when an endpoint is configured. Without an endpoint,
+//! with the SDK disabled, or on exporter setup failure, the server uses a
+//! no-op meter but still tracks calls and invokes any observer. Use
+//! [`without_telemetry`](crate::server::GrpcServerBuilder::without_telemetry)
+//! to remove tracking and observation altogether.
+//!
+//! The server flushes providers it starts. If you pass your own instance with
+//! [`GrpcServerBuilder::telemetry`](crate::server::GrpcServerBuilder::telemetry),
+//! call [`Telemetry::shutdown`] after all users finish. The provider shutdown
+//! wait (up to five seconds) is separate from the server's connection drain.
 //!
 //! Both `rpc.server.call.duration` and `rpc.server.active_requests` use
 //! `rpc.system.name = "grpc"` and the canonical `package.Service/Method` as

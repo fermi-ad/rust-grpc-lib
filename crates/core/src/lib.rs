@@ -46,9 +46,11 @@
 //! | `server` | You serve services | `server`, `telemetry`, the [`auth`] contexts and policy types, [`access_controlled_service`], [`roles`], [`any_authenticated`], [`public`] |
 //! | `jwks-url` | Tokens are validated against a JWKS URL | `KeyValidatorConfig::from_jwks_url` |
 //! | `build` | Your `build.rs` generates the bundled protos (`[build-dependencies]`) | `build_support` |
-//! | `test-util` | Tests need tokens, contexts, health queries or live-server checks (`[dev-dependencies]` only); implies `server` | `testing`, `RequestContext::for_test`, `PublicContext::for_test` |
+//! | `test-util` | Tests need tokens, contexts, health queries, metrics or live-server checks (`[dev-dependencies]` only); implies `server` | `testing`, `RequestContext::for_test`, `PublicContext::for_test` |
 //!
-//! Client-only builds do not compile OpenTelemetry.
+//! The `server` feature builds OpenTelemetry, reqwest and rustls for OTLP/HTTP
+//! metrics even when no collector is configured. Client-only builds do not
+//! pull in this telemetry stack.
 //!
 //! `test-util` ships a publicly known RSA key pair: never enable it in a
 //! production build.
@@ -69,12 +71,13 @@
 //!   contexts, access policies and how they are enforced.
 //! - [`pool`]: the shared channel pool and its keep-alive settings.
 //! - `server` (`server`): `GrpcServer::builder`, the gate, health and per-RPC
-//!   tracing spans.
-//! - `telemetry` (`server`): the OpenTelemetry API re-export for server metrics.
+//!   tracing spans, signal handling and bounded graceful shutdown.
+//! - `telemetry` (`server`): per-RPC and runtime metrics, OTLP/HTTP configuration,
+//!   explicit provider ownership and the OpenTelemetry API re-export.
 //! - `build_support` (`build`): `generate_protos` and `Config` for `build.rs`.
 //! - `testing` (`test-util`): claims, contexts, tokens, conformance checks,
 //!   health queries (with `testing::StreamExt` to read `health_watch`) and
-//!   span capture.
+//!   span capture, in-memory metrics and an isolated server harness.
 //!
 //! # Getting started
 //!

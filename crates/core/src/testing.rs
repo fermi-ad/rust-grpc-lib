@@ -27,8 +27,10 @@
 //!   report, so no `tonic-health` dependency is needed. Read the stream
 //!   `health_watch` returns with [`StreamExt`], so no `futures-util`
 //!   dependency is needed either.
-//! - **Metrics:** [`InMemory`] collects isolated telemetry on demand for
-//!   assertions about histograms, counters, and completed RPCs.
+//! - **Metrics:** [`InMemory`] collects isolated telemetry on demand, or use
+//!   [`TestServerBuilder::with_metrics`] for a harness-managed provider. Poll
+//!   with [`InMemory::calls`] or [`InMemory::wait_until`] when a snapshot could
+//!   race with completion on the server task.
 //! - **Tracing:** [`capture_spans`] records span fields, such as those the
 //!   trace layer and the gate record on the `rpc` span.
 //!
