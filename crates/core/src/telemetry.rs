@@ -21,6 +21,7 @@ use self::{buckets::validate_buckets, config::ExportMode, exporter::ShutdownRequ
 mod buckets;
 mod config;
 mod exporter;
+pub(crate) mod label;
 #[cfg(test)]
 mod tests;
 

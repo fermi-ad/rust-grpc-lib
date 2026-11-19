@@ -33,9 +33,10 @@
 //!
 //! ```rust,no_run
 //! # use std::{future::Future, sync::Arc, time::Duration};
+//! # use rust_grpc_lib::__private::WireMethods;
 //! # use rust_grpc_lib::auth::{ServicePolicy, TokenValidator};
 //! # use rust_grpc_lib::server::{GrpcServer, GrpcService, ServeError};
-//! # async fn run<V: TokenValidator, T: ServicePolicy<S>, S: GrpcService>(
+//! # async fn run<V: TokenValidator, T: ServicePolicy<S>, S: GrpcService + WireMethods>(
 //! #     validator: Arc<V>,
 //! #     new_server: fn(T) -> S,
 //! #     my_impl: T,
@@ -80,8 +81,10 @@ use tonic::transport::{Error as TransportError, Server};
 use tonic_health::ServingStatus;
 use tonic_health::server::{HealthReporter, health_reporter};
 
+use crate::__private::WireMethods;
 use crate::auth::gate::AuthGate;
 use crate::auth::{PolicyTable, ServicePolicy, TokenValidator};
+use crate::telemetry::label::{LabelIndex, MethodLabels};
 use crate::trace::GrpcTraceLayer;
 
 #[cfg(test)]
@@ -130,6 +133,7 @@ impl GrpcServer {
             routes: Routes::new(health_service),
             health: reporter,
             served: Vec::new(),
+            labels: LabelIndex::new(),
         }
     }
 }
@@ -141,6 +145,7 @@ pub struct GrpcServerBuilder<V> {
     routes: Routes,
     health: HealthReporter,
     served: Vec<&'static str>,
+    labels: LabelIndex,
 }
 
 impl<V: TokenValidator> GrpcServerBuilder<V> {
@@ -162,19 +167,27 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
     /// `T: ServicePolicy<S>` is unsatisfied if `T`'s `impl` block lacks
     /// [`#[access_controlled_service]`](crate::access_controlled_service), or
     /// if `constructor` belongs to a different service than that block.
+    /// The server type `S` also needs the wire method metadata emitted by
+    /// `build_support`; regenerate older server code to get it.
     #[must_use = "this consumes the builder and returns an updated one; the service is lost if the result is dropped"]
     pub fn add_service<T, S>(mut self, constructor: impl FnOnce(T) -> S, implementation: T) -> Self
     where
         T: ServicePolicy<S>,
-        S: GrpcService,
+        S: GrpcService + WireMethods,
     {
+        let table = PolicyTable::of::<S, T>();
         let gate = AuthGate::new(
             constructor(implementation),
-            PolicyTable::of::<S, T>(),
+            table,
             Arc::clone(&self.validator),
         );
         self.routes = self.routes.add_service(gate);
         self.served.push(S::NAME);
+        self.labels.register(MethodLabels {
+            service_name: S::NAME,
+            wire_methods: S::WIRE_METHODS,
+            table,
+        });
         self
     }
 

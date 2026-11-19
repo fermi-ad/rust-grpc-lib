@@ -20,6 +20,7 @@ use tonic::body::Body;
 use tonic::codegen::Service;
 use tonic::codegen::http::{Request as HttpRequest, Response as HttpResponse};
 
+use crate::__private::WireMethods;
 use crate::auth::policy::MethodPolicy;
 use crate::server::GrpcServer;
 use crate::testing::test_validator;
@@ -84,6 +85,15 @@ struct Stand {
 
 impl tonic::server::NamedService for Stand {
     const NAME: &'static str = "pkg.Stand";
+}
+
+impl WireMethods for Stand {
+    const WIRE_METHODS: &'static [&'static str] = &[
+        "pkg.Stand/get_data",
+        "pkg.Stand/list_items",
+        "pkg.Stand/ping",
+        "pkg.Stand/delete_item",
+    ];
 }
 
 impl Service<HttpRequest<Body>> for Stand {
