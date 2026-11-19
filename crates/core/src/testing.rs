@@ -26,6 +26,8 @@
 //!   report, so no `tonic-health` dependency is needed. Read the stream
 //!   `health_watch` returns with [`StreamExt`], so no `futures-util`
 //!   dependency is needed either.
+//! - **Metrics:** [`InMemory`] collects isolated telemetry on demand for
+//!   assertions about histograms, counters, and completed RPCs.
 //! - **Tracing:** [`capture_spans`] records span fields, such as those the
 //!   trace layer and the gate record on the `rpc` span.
 //!
@@ -51,6 +53,7 @@ use crate::auth::KeycloakClaims;
 
 mod conformance;
 mod health;
+mod metrics;
 mod requests;
 mod spans;
 #[cfg(test)]
@@ -63,6 +66,7 @@ pub use conformance::{
 };
 pub use futures_util::StreamExt;
 pub use health::{ServingStatus, health_status, health_watch};
+pub use metrics::{CounterSnapshot, HistogramSnapshot, InMemory};
 pub use requests::{authenticated_request, public_request};
 pub use rust_auth_lib::test_fixtures;
 pub use rust_auth_lib::test_fixtures::KeycloakClaimsBuilder;
