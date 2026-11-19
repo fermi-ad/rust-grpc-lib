@@ -60,6 +60,9 @@
 //! | [`serve_with_shutdown`](GrpcServerBuilder::serve_with_shutdown) | `Result<(), ServeError>` | Binds; uses your shutdown future |
 //! | [`serve_on_listener`](GrpcServerBuilder::serve_on_listener) | `Result<(), ServeError>` | Uses your listener and shutdown future |
 //!
+//! All three use [`GrpcServerBuilder::shutdown_grace`]: a 30-second drain by
+//! default, starting at shutdown, not at startup. At expiry the server warns,
+//! closes remaining connections, and returns `Ok(())` after telemetry cleanup.
 //! All three return [`ServeError`], so `?` unifies them in one function.
 
 use std::convert::Infallible;
@@ -72,7 +75,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use opentelemetry::metrics::Meter;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::oneshot, time::sleep};
 use tonic::body::Body;
 use tonic::codegen::Service;
 use tonic::codegen::http::{Request, Response};
@@ -98,11 +101,15 @@ use crate::telemetry::{
 };
 use crate::trace::GrpcTraceLayer;
 
+mod connections;
 mod shutdown;
 #[cfg(test)]
 mod tests;
 
 pub use shutdown::shutdown_signal;
+
+/// How long to let in-flight RPCs finish once shutdown begins, by default.
+pub const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 /// The bounds a tonic service needs to be served, such as a generated
 /// `FooServer<T>`. Blanket-implemented; never implement it by hand.
@@ -155,6 +162,7 @@ impl GrpcServer {
             automatic_telemetry: OnceLock::new(),
             on_call: None,
             handle_signals: true,
+            shutdown_grace: DEFAULT_SHUTDOWN_GRACE,
         }
     }
 }
@@ -163,9 +171,10 @@ impl GrpcServer {
 ///
 /// By default telemetry reads the environment. SDK disablement, no endpoint,
 /// or exporter setup failure leaves call tracking on with a no-op meter.
-/// When the server owns telemetry, it flushes after graceful drain or a
-/// transport error, waiting up to five seconds. An outer timeout that drops
-/// the serve future can prevent this awaited flush.
+/// When the server owns telemetry, it flushes after the drain (including
+/// forced closure) or a transport error. Budget the configured shutdown grace
+/// plus up to five seconds for the flush. An outer timeout that drops the
+/// serve future closes connections but can prevent this awaited flush.
 pub struct GrpcServerBuilder<V> {
     validator: Arc<V>,
     timeout: Option<Duration>,
@@ -177,6 +186,7 @@ pub struct GrpcServerBuilder<V> {
     automatic_telemetry: OnceLock<Telemetry>,
     on_call: Option<OnCall>,
     handle_signals: bool,
+    shutdown_grace: Duration,
 }
 
 enum TelemetrySource {
@@ -274,6 +284,20 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
         self
     }
 
+    /// Set the drain deadline for all three serve methods. Defaults to
+    /// [`DEFAULT_SHUTDOWN_GRACE`]. The timer starts at shutdown, after health
+    /// is marked `NotServing`, not when the server starts.
+    ///
+    /// At the deadline, remaining connections and their in-flight RPCs are
+    /// dropped. Zero closes them immediately after the health change; there
+    /// is no unbounded setting. The automatic telemetry flush runs afterward
+    /// and may take up to five additional seconds.
+    #[must_use = "this consumes the builder and returns an updated one; the shutdown grace is lost if the result is dropped"]
+    pub fn shutdown_grace(mut self, grace: Duration) -> Self {
+        self.shutdown_grace = grace;
+        self
+    }
+
     /// Disable process signal handling for [`Self::serve`]. The server then
     /// runs until it fails or its future is dropped. This does not affect
     /// [`Self::serve_with_shutdown`] or [`Self::serve_on_listener`].
@@ -283,7 +307,8 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
         self
     }
 
-    /// Serves on `addr`, then returns `Ok(())` after a graceful drain.
+    /// Serves on `addr`, then returns `Ok(())` after shutdown, with the drain
+    /// bounded by [`Self::shutdown_grace`].
     ///
     /// By default this registers process handlers before binding and starts
     /// draining on SIGTERM or SIGINT on Unix, or Ctrl-C on Windows. See
@@ -324,7 +349,7 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
     ///
     /// Health flips to `NotServing` before the drain, so load balancers stop
     /// sending traffic while in-flight RPCs finish. Open streams, including
-    /// health `Watch`, delay completion.
+    /// health `Watch`, are closed if they outlast [`Self::shutdown_grace`].
     ///
     /// # Errors
     ///
@@ -387,20 +412,25 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
             telemetry,
             automatic_telemetry,
             on_call,
+            shutdown_grace,
             ..
         } = self;
         let telemetry = telemetry.resolve(&automatic_telemetry);
-        let metrics = telemetry.map(|telemetry| CallLayer::recording(telemetry, labels, on_call));
+        let (calls, calls_open) = tokio::sync::watch::channel(());
+        let metrics = telemetry
+            .map(move |telemetry| CallLayer::recording(telemetry, labels, on_call, calls_open));
 
         set_status(&health, &served, ServingStatus::Serving).await;
         let mut probe = telemetry.and_then(Telemetry::start_runtime_probe);
         // Flip health before the graceful drain begins so probes see
         // `NotServing` while in-flight RPCs finish.
+        let (start_grace, grace_timer) = oneshot::channel();
         let serving_probe = &mut probe;
         let signal = async move {
             shutdown.await;
             drop(serving_probe.take());
             set_status(&health, &served, ServingStatus::NotServing).await;
+            let _ = start_grace.send((!shutdown_grace.is_zero()).then(|| sleep(shutdown_grace)));
         };
 
         let mut server = Server::builder();
@@ -427,12 +457,35 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
             .layer(GrpcTraceLayer::new())
             .add_routes(routes);
 
-        let result = router
-            .serve_with_incoming_shutdown(incoming.with_nodelay(Some(true)), signal)
-            .await;
+        let connections = connections::Connections::default();
+        let result = {
+            let serve = router.serve_with_incoming_shutdown(connections.incoming(incoming), signal);
+            tokio::pin!(serve);
+            tokio::select! {
+                biased;
+                result = &mut serve => result,
+                () = async {
+                    match grace_timer.await {
+                        Ok(Some(timer)) => timer.await,
+                        Ok(None) => {} // Zero grace needs no timer tick.
+                        Err(_) => pending::<()>().await,
+                    }
+                } => {
+                    tracing::warn!(grace = ?shutdown_grace, "shutdown grace expired; closing remaining connections");
+                    connections.close();
+                    // Keep tonic's join for its connection tasks. Dropping
+                    // the serve future by itself would leave them running.
+                    serve.await
+                }
+            }
+        };
+        drop(connections);
         // Also release the probe if the transport returns without a signal.
         // Dropping the serve future releases it through the same guard.
         drop(probe);
+        // Hyper can run HTTP/2 streams on separate tasks. Before flushing,
+        // let those tasks release their services/bodies and record cancellation.
+        calls.closed().await;
         finish_serving(result, automatic_telemetry.into_inner()).await
     }
 }

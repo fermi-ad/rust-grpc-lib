@@ -10,6 +10,7 @@ use opentelemetry::{
     KeyValue,
     metrics::{Histogram, UpDownCounter},
 };
+use tokio::sync::watch;
 use tonic::Code;
 
 use super::{CallSummary, LOG_TARGET, Telemetry, call::Sink, label::LabelIndex, layer::CallLayer};
@@ -32,6 +33,9 @@ struct RecorderInner {
     methods: HashMap<&'static str, [KeyValue; 2]>,
     other: [KeyValue; 2],
     on_call: Option<OnCall>,
+    // Shared by the layer, each service and all call completion guards.
+    // Dropped only after the last guard records its outcome.
+    _serving: watch::Receiver<()>,
 }
 
 impl CallLayer<Recorder> {
@@ -39,14 +43,20 @@ impl CallLayer<Recorder> {
         telemetry: &Telemetry,
         labels: LabelIndex,
         on_call: Option<OnCall>,
+        serving: watch::Receiver<()>,
     ) -> Self {
-        let recorder = Recorder::new(telemetry, &labels, on_call);
+        let recorder = Recorder::new(telemetry, &labels, on_call, serving);
         Self::new(labels, recorder)
     }
 }
 
 impl Recorder {
-    fn new(telemetry: &Telemetry, labels: &LabelIndex, on_call: Option<OnCall>) -> Self {
+    fn new(
+        telemetry: &Telemetry,
+        labels: &LabelIndex,
+        on_call: Option<OnCall>,
+        serving: watch::Receiver<()>,
+    ) -> Self {
         Self {
             inner: Arc::new(RecorderInner {
                 duration: telemetry.duration_histogram(
@@ -65,6 +75,7 @@ impl Recorder {
                     .collect(),
                 other: method_attributes("_OTHER"),
                 on_call,
+                _serving: serving,
             }),
         }
     }

@@ -298,7 +298,7 @@ fn layer(telemetry: &Telemetry, on_call: Option<OnCall>) -> CallLayer<Recorder> 
         wire_methods: &[METHOD],
         table: PolicyTable::of::<(), TestPolicy>(),
     });
-    CallLayer::recording(telemetry, labels, on_call)
+    CallLayer::recording(telemetry, labels, on_call, watch::channel(()).1)
 }
 
 fn request<T>(path: &str, body: T) -> Request<T> {

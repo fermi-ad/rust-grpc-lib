@@ -9,12 +9,16 @@ use opentelemetry_sdk::metrics::{
 };
 use tokio::{sync::oneshot, time::timeout};
 use tonic::codegen::http::uri::PathAndQuery;
-use tonic::{Code, Status, client::Grpc, transport::Endpoint};
+use tonic::{Code, Status, Streaming, client::Grpc, transport::Endpoint};
 use tonic_health::pb::HealthCheckRequest;
+use tonic_health::pb::HealthCheckResponse;
 use tonic_health::pb::health_check_response::ServingStatus as WireStatus;
+use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::health_server::Health;
 use tonic_health::server::HealthService;
 use tonic_prost::ProstCodec;
+use tracing::{Event, Level, Subscriber};
+use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
 use crate::auth::{Access, MethodPolicy};
 use crate::testing::{health_status, test_token, test_validator};
@@ -149,6 +153,198 @@ async fn signal_opt_out_still_returns_bind_errors() {
         .await
         .unwrap_err();
     assert!(matches!(err, ServeError::Bind(_)), "{err:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_without_connections_does_not_wait_for_grace() {
+    let builder = GrpcServer::builder(test_validator(KID)).without_telemetry();
+    assert_eq!(builder.shutdown_grace, Duration::from_secs(30));
+    let start = tokio::time::Instant::now();
+    builder
+        .serve_with_shutdown("127.0.0.1:0".parse().unwrap(), async {})
+        .await
+        .unwrap();
+    assert_eq!(start.elapsed(), Duration::ZERO);
+}
+
+#[tokio::test]
+async fn shutdown_grace_starts_at_signal_and_cancels_streams_before_flushing() {
+    let grace = Duration::from_millis(200);
+    let (telemetry, exporter) = in_memory();
+    let (summaries, mut calls) = tokio::sync::mpsc::unbounded_channel();
+    let builder = GrpcServer::builder(test_validator(KID))
+        .shutdown_grace(grace)
+        .with_automatic_test_telemetry(telemetry.clone())
+        .on_call(move |summary| summaries.send(*summary).unwrap());
+    let (warnings, mut events) = tokio::sync::mpsc::unbounded_channel();
+    // Keep two dispatches registered so tracing combines their callsite
+    // interests instead of caching just the first polling thread's default.
+    // Other tests can reach this same warning callsite without a subscriber.
+    let _no_events = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    // The server task runs on this test's current thread.
+    let _subscriber = tracing::subscriber::set_default(
+        tracing_subscriber::registry().with(GraceWarnings(warnings)),
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop, signal) = oneshot::channel();
+    let task = tokio::spawn(builder.serve_on_listener(listener, async { signal.await.unwrap() }));
+
+    // Use distinct connections so expiry has to wake every socket, not just
+    // the last one to register an I/O waker.
+    let mut first = open_watch(addr).await;
+    tokio::time::sleep(grace).await;
+    let mut second = open_watch(addr).await;
+    assert!(!task.is_finished(), "grace must not limit normal serving");
+    assert!(events.try_recv().is_err());
+    assert_eq!(telemetry.runtime_probe_servers(), 1);
+    assert!(exporter.get_finished_metrics().unwrap().is_empty());
+
+    let start = tokio::time::Instant::now();
+    stop.send(()).unwrap();
+    assert_eq!(watch_status(&mut first).await, WireStatus::NotServing);
+    assert_eq!(telemetry.runtime_probe_servers(), 0);
+    timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(
+        start.elapsed() >= grace,
+        "connections closed before the deadline"
+    );
+    events.try_recv().expect("grace expiry must log a warning");
+    assert!(events.try_recv().is_err());
+
+    assert_watch_closed(&mut first).await;
+    assert_watch_closed(&mut second).await;
+    for _ in 0..2 {
+        let call = calls.try_recv().unwrap();
+        assert_eq!(call.method, Some("grpc.health.v1.Health/Watch"));
+        assert_eq!(call.status, Code::Cancelled);
+    }
+    assert!(calls.try_recv().is_err());
+    assert!(!telemetry.is_enabled());
+
+    let exports = exporter.get_finished_metrics().unwrap();
+    let metric = |name| {
+        exports[0]
+            .scope_metrics()
+            .flat_map(|scope| scope.metrics())
+            .find(|metric| metric.name() == name)
+            .unwrap()
+            .data()
+    };
+    let AggregatedMetrics::F64(MetricData::Histogram(duration)) =
+        metric("rpc.server.call.duration")
+    else {
+        panic!("expected the duration histogram");
+    };
+    let point = duration.data_points().next().unwrap();
+    assert_eq!(point.count(), 2);
+    assert!(point.attributes().any(|attr| {
+        attr.key.as_str() == "rpc.response.status_code"
+            && attr.value == Value::from(Code::Cancelled as i64)
+    }));
+    let AggregatedMetrics::I64(MetricData::Sum(active)) = metric("rpc.server.active_requests")
+    else {
+        panic!("expected the active requests counter");
+    };
+    assert_eq!(active.data_points().next().unwrap().value(), 0);
+}
+
+#[tokio::test]
+async fn zero_grace_closes_a_live_stream_on_the_address_bound_path() {
+    let builder = GrpcServer::builder(test_validator(KID))
+        .without_telemetry()
+        .shutdown_grace(Duration::ZERO);
+    let health = builder.health.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let (ready, bound) = oneshot::channel();
+    let (stop, signal) = oneshot::channel();
+    let task = tokio::spawn(builder.serve_with_shutdown(addr, async {
+        ready.send(()).unwrap();
+        signal.await.unwrap();
+    }));
+    timeout(Duration::from_secs(5), bound)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut watch = open_watch(addr).await;
+    stop.send(()).unwrap();
+    timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(status_of(&health, "").await, WireStatus::NotServing);
+    assert_watch_closed(&mut watch).await;
+}
+
+#[tokio::test]
+async fn cancelling_serve_closes_live_connections() {
+    let builder = GrpcServer::builder(test_validator(KID)).without_telemetry();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(builder.serve_on_listener(listener, pending()));
+    let mut watch = open_watch(addr).await;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert_watch_closed(&mut watch).await;
+}
+
+async fn open_watch(addr: SocketAddr) -> Streaming<HealthCheckResponse> {
+    timeout(Duration::from_secs(5), async {
+        let channel = Endpoint::from_shared(format!("http://{addr}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut watch = HealthClient::new(channel)
+            .watch(HealthCheckRequest::default())
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(watch_status(&mut watch).await, WireStatus::Serving);
+        watch
+    })
+    .await
+    .expect("health Watch must open")
+}
+
+async fn watch_status(watch: &mut Streaming<HealthCheckResponse>) -> WireStatus {
+    timeout(Duration::from_secs(5), watch.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .status()
+}
+
+async fn assert_watch_closed(watch: &mut Streaming<HealthCheckResponse>) {
+    timeout(Duration::from_secs(5), async {
+        // NotServing may already be buffered, but the stream must then end.
+        while let Ok(Some(_)) = watch.message().await {}
+    })
+    .await
+    .expect("the client's open Watch must end without being dropped by the client");
+}
+
+struct GraceWarnings(tokio::sync::mpsc::UnboundedSender<()>);
+
+impl<S: Subscriber> Layer<S> for GraceWarnings {
+    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+        let metadata = event.metadata();
+        if metadata.level() == &Level::WARN
+            && metadata.target() == module_path!().strip_suffix("::tests").unwrap()
+            && metadata.fields().field("grace").is_some()
+        {
+            self.0.send(()).unwrap();
+        }
+    }
 }
 
 #[tokio::test]
