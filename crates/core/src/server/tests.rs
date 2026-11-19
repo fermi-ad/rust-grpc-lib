@@ -111,7 +111,7 @@ fn telemetry_is_lazy_and_the_last_selection_replaces_a_cached_meter() {
     assert!(
         builder
             .telemetry
-            .call_layer(&builder.automatic_telemetry, LabelIndex::new(), None)
+            .resolve(&builder.automatic_telemetry)
             .is_some()
     );
 
@@ -121,7 +121,7 @@ fn telemetry_is_lazy_and_the_last_selection_replaces_a_cached_meter() {
     assert!(
         builder
             .telemetry
-            .call_layer(&builder.automatic_telemetry, LabelIndex::new(), None)
+            .resolve(&builder.automatic_telemetry)
             .is_none()
     );
 
@@ -294,6 +294,76 @@ async fn server_leaves_shared_telemetry_running_and_off_meter_exports_nothing() 
             .collect();
         assert_eq!(names, ["test.shared"]);
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn shared_runtime_probe_tracks_servers_until_shutdown_or_cancellation() {
+    let (shared, _) = in_memory();
+    let builder = || GrpcServer::builder(test_validator(KID)).telemetry(&shared);
+    drop(builder().meter());
+    assert_eq!(shared.runtime_probe_servers(), 0);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint =
+        Endpoint::from_shared(format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let (stop, signal) = oneshot::channel();
+    let (started, ready) = oneshot::channel();
+    let first = tokio::spawn(builder().serve_on_listener(listener, async {
+        started.send(()).unwrap();
+        signal.await.unwrap();
+    }));
+    ready.await.unwrap();
+    assert_eq!(shared.runtime_probe_servers(), 1);
+
+    let (started, ready) = oneshot::channel();
+    let second = tokio::spawn(builder().serve_with_shutdown(
+        "127.0.0.1:0".parse().unwrap(),
+        async {
+            started.send(()).unwrap();
+            pending::<()>().await;
+        },
+    ));
+    ready.await.unwrap();
+    assert_eq!(shared.runtime_probe_servers(), 2);
+
+    let (started, ready) = oneshot::channel();
+    let off = tokio::spawn(builder().without_telemetry().serve_with_shutdown(
+        "127.0.0.1:0".parse().unwrap(),
+        async {
+            started.send(()).unwrap();
+            pending::<()>().await;
+        },
+    ));
+    ready.await.unwrap();
+    assert_eq!(shared.runtime_probe_servers(), 2);
+
+    // Hold a streaming RPC open so graceful drain cannot finish yet.
+    let mut watch =
+        tonic_health::pb::health_client::HealthClient::new(endpoint.connect().await.unwrap())
+            .watch(HealthCheckRequest::default())
+            .await
+            .unwrap()
+            .into_inner();
+    assert_eq!(
+        watch.message().await.unwrap().unwrap().status(),
+        WireStatus::Serving
+    );
+    second.abort();
+    assert!(second.await.unwrap_err().is_cancelled());
+    assert_eq!(shared.runtime_probe_servers(), 1);
+
+    stop.send(()).unwrap();
+    assert_eq!(
+        watch.message().await.unwrap().unwrap().status(),
+        WireStatus::NotServing
+    );
+    assert!(!first.is_finished());
+    assert_eq!(shared.runtime_probe_servers(), 0);
+    drop(watch);
+    first.await.unwrap().unwrap();
+    assert!(shared.is_enabled());
+    off.abort();
+    assert!(off.await.unwrap_err().is_cancelled());
 }
 
 #[tokio::test]

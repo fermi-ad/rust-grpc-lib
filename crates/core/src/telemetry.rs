@@ -15,6 +15,13 @@
 //! `rpc.service`, the method segment alone as `rpc.method`, and `grpc.status`
 //! with tonic's debug name (such as `Ok`).
 //!
+//! With metrics enabled, serving starts a runtime probe that records
+//! `runtime.scheduling_delay` in seconds using the configured duration buckets.
+//! Servers sharing a [`Telemetry`] share one probe, running on the first
+//! server's runtime. On a multi-threaded runtime the probe samples whichever
+//! worker runs it; it detects broad starvation, not a single blocked worker.
+//! Disable it with [`TelemetryConfig::runtime_probe`] or `GRPC_RUNTIME_PROBE=false`.
+//!
 //! A call completion observer receives a [`CallSummary`] exactly once per
 //! tracked call, including cancellations. It runs on the serving path after
 //! the built-in metrics are recorded, so it must be cheap and non-blocking.
@@ -39,6 +46,7 @@ mod config;
 mod exporter;
 pub(crate) mod label;
 pub(crate) mod layer;
+mod probe;
 pub(crate) mod recorder;
 #[cfg(test)]
 mod tests;
@@ -63,7 +71,13 @@ pub struct Telemetry {
 struct TelemetryInner {
     meter: Meter,
     bounds: Vec<f64>,
-    shutdown: Mutex<Option<ShutdownRequest>>,
+    runtime_probe: bool,
+    lifecycle: Mutex<Lifecycle>,
+}
+
+struct Lifecycle {
+    shutdown: Option<ShutdownRequest>,
+    probe: Option<probe::Running>,
 }
 
 impl Telemetry {
@@ -99,7 +113,7 @@ impl Telemetry {
     /// Whether this instance has a real provider that has not begun shutdown.
     #[must_use = "this only reports whether the provider is active"]
     pub fn is_enabled(&self) -> bool {
-        self.inner.shutdown.lock().unwrap().is_some()
+        self.inner.lifecycle.lock().unwrap().shutdown.is_some()
     }
 
     /// Get a cheap clone of the meter, which does not export when disabled.
@@ -137,7 +151,8 @@ impl Telemetry {
         self.build_histogram(name, description, bounds)
     }
 
-    /// Flush and stop the shared provider, waiting at most five seconds.
+    /// Stop the runtime probe, then flush and stop the shared provider,
+    /// waiting at most five seconds for the provider.
     ///
     /// Requires a Tokio runtime with time enabled when an active provider is
     /// present. Only the first call starts shutdown; calls on other clones do
@@ -145,10 +160,40 @@ impl Telemetry {
     /// Dropping the last handle without calling this starts best-effort cleanup
     /// without waiting for it.
     pub async fn shutdown(self) {
-        let request = self.inner.shutdown.lock().unwrap().take();
+        let request = {
+            let mut lifecycle = self.inner.lifecycle.lock().unwrap();
+            drop(lifecycle.probe.take());
+            lifecycle.shutdown.take()
+        };
         if let Some(request) = request {
             exporter::shutdown(request).await;
         }
+    }
+
+    pub(crate) fn start_runtime_probe(&self) -> Option<probe::Serving> {
+        let mut lifecycle = self.inner.lifecycle.lock().unwrap();
+        if !self.inner.runtime_probe || lifecycle.shutdown.is_none() {
+            return None;
+        }
+        let running = lifecycle.probe.get_or_insert_with(|| {
+            probe::Running::start(self.duration_histogram(
+                "runtime.scheduling_delay",
+                "How late the Tokio runtime wakes a fixed-period timer",
+            ))
+        });
+        running.servers += 1;
+        Some(probe::Serving(self.clone()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_probe_servers(&self) -> usize {
+        self.inner
+            .lifecycle
+            .lock()
+            .unwrap()
+            .probe
+            .as_ref()
+            .map_or(0, |probe| probe.servers)
     }
 
     // C12 also uses this path to install an in-memory reader.
@@ -161,6 +206,7 @@ impl Telemetry {
         reader: impl FnOnce() -> Result<R, &'static str> + Send + 'static,
         config: TelemetryConfig,
     ) -> Self {
+        let runtime_probe = config.runtime_probe_enabled(true);
         // The SDK reads OTEL_RESOURCE_ATTRIBUTES. The resolved config wins
         // for service.name and, if explicitly provided, service.version.
         let mut resource =
@@ -176,7 +222,7 @@ impl Telemetry {
                 .with_resource(resource)
                 .build())
         }) {
-            Ok((meter, request)) => Self::new(meter, bounds, Some(request)),
+            Ok((meter, request)) => Self::new(meter, bounds, runtime_probe, Some(request)),
             Err(reason) => {
                 tracing::error!(target: LOG_TARGET, reason, "failed to start telemetry; using a no-op meter");
                 Self::noop(bounds)
@@ -189,15 +235,24 @@ impl Telemetry {
     }
 
     fn noop(bounds: Vec<f64>) -> Self {
-        Self::new(Self::noop_meter(), bounds, None)
+        Self::new(Self::noop_meter(), bounds, false, None)
     }
 
-    fn new(meter: Meter, bounds: Vec<f64>, shutdown: Option<ShutdownRequest>) -> Self {
+    fn new(
+        meter: Meter,
+        bounds: Vec<f64>,
+        runtime_probe: bool,
+        shutdown: Option<ShutdownRequest>,
+    ) -> Self {
         Self {
             inner: Arc::new(TelemetryInner {
                 meter,
                 bounds,
-                shutdown: Mutex::new(shutdown),
+                runtime_probe,
+                lifecycle: Mutex::new(Lifecycle {
+                    shutdown,
+                    probe: None,
+                }),
             }),
         }
     }

@@ -95,7 +95,7 @@ use crate::telemetry::{
     CallSummary, Telemetry, TelemetryConfig,
     label::{LabelIndex, MethodLabels},
     layer::CallLayer,
-    recorder::{OnCall, Recorder},
+    recorder::OnCall,
 };
 use crate::trace::GrpcTraceLayer;
 
@@ -357,13 +357,17 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
             on_call,
             ..
         } = self;
-        let metrics = telemetry.call_layer(&automatic_telemetry, labels, on_call);
+        let telemetry = telemetry.resolve(&automatic_telemetry);
+        let metrics = telemetry.map(|telemetry| CallLayer::recording(telemetry, labels, on_call));
 
         set_status(&health, &served, ServingStatus::Serving).await;
+        let mut probe = telemetry.and_then(Telemetry::start_runtime_probe);
         // Flip health before the graceful drain begins so probes see
         // `NotServing` while in-flight RPCs finish.
+        let serving_probe = &mut probe;
         let signal = async move {
             shutdown.await;
+            drop(serving_probe.take());
             set_status(&health, &served, ServingStatus::NotServing).await;
         };
 
@@ -394,6 +398,9 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
         let result = router
             .serve_with_incoming_shutdown(incoming.with_nodelay(Some(true)), signal)
             .await;
+        // Also release the probe if the transport returns without a signal.
+        // Dropping the serve future releases it through the same guard.
+        drop(probe);
         finish_serving(result, automatic_telemetry.into_inner()).await
     }
 }
@@ -409,16 +416,6 @@ impl TelemetrySource {
             Self::Shared(telemetry) => Some(telemetry),
             Self::Off => None,
         }
-    }
-
-    fn call_layer(
-        &self,
-        automatic: &OnceLock<Telemetry>,
-        labels: LabelIndex,
-        on_call: Option<OnCall>,
-    ) -> Option<CallLayer<Recorder>> {
-        self.resolve(automatic)
-            .map(|telemetry| CallLayer::recording(telemetry, labels, on_call))
     }
 }
 

@@ -122,8 +122,9 @@ impl TelemetryConfig {
         self
     }
 
-    /// Set whether the runtime probe may run when metrics are enabled.
-    /// This cannot enable the probe on a no-op meter.
+    /// Set whether to monitor runtime scheduling delay while serving.
+    /// Enabled by default when metrics are enabled; a no-op meter never runs
+    /// the probe. See the [telemetry module](super) for what it measures.
     #[must_use = "this consumes the config and returns an updated one"]
     pub fn runtime_probe(mut self, enabled: bool) -> Self {
         self.runtime_probe = enabled;
@@ -140,13 +141,11 @@ impl TelemetryConfig {
         }
     }
 
-    // C9 resolves the preference against the actual meter, including exporter failures.
-    #[allow(dead_code)]
     pub(super) fn runtime_probe_enabled(&self, metrics_enabled: bool) -> bool {
         self.runtime_probe && metrics_enabled
     }
 
-    fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
+    pub(super) fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
         let non_empty = |key| lookup(key).filter(|value| !value.is_empty());
         let endpoint = non_empty("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
             .or_else(|| non_empty("OTEL_EXPORTER_OTLP_ENDPOINT").map(metrics_url));

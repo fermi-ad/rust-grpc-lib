@@ -149,7 +149,7 @@ GrpcServer::builder(validator)                 // Arc<impl TokenValidator>
 
 ## Environment variables
 
-`GrpcServer` reads none itself. The validator usually comes from `KeyValidatorConfig::from_env()` (from `rust-auth-lib`, re-exported in `rust_grpc_lib::auth`):
+The validator usually comes from `KeyValidatorConfig::from_env()` (from `rust-auth-lib`, re-exported in `rust_grpc_lib::auth`):
 
 | Variable | Meaning |
 |---|---|
@@ -160,6 +160,18 @@ GrpcServer::builder(validator)                 // Arc<impl TokenValidator>
 | `AUTH_CACHE_TTL_SECS` | Optional key refresh interval. Default 3600 s for a URL; for a file, unset means the keys are read once |
 
 With no key source set, `from_env` returns a `ConfigError`. Client-side variables (channel pool, `FileTokenProvider`) are in the [client guide](client.md#environment-variables).
+
+## Runtime scheduling delay
+
+While metrics export is enabled, the server records `runtime.scheduling_delay`
+in seconds using the configured duration buckets. The probe measures how late
+Tokio wakes a 10 ms timer and skips missed ticks rather than catching up in a
+burst. Servers sharing telemetry share one probe, which stops when the last
+server begins shutdown. To opt out, set `GRPC_RUNTIME_PROBE=false` or use
+`TelemetryConfig::runtime_probe(false)`.
+
+On a multi-threaded runtime the probe samples whichever worker runs it. It can
+show broad runtime starvation, but it cannot diagnose a single blocked worker.
 
 ## Tracing and logs
 
