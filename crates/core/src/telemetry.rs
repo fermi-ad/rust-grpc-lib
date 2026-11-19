@@ -19,9 +19,14 @@ use opentelemetry_sdk::{
 use self::{buckets::validate_buckets, config::ExportMode, exporter::ShutdownRequest};
 
 mod buckets;
+// Call tracking is not installed until the builder integration chunk.
+#[cfg_attr(not(test), allow(dead_code))]
+mod call;
 mod config;
 mod exporter;
 pub(crate) mod label;
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod layer;
 #[cfg(test)]
 mod tests;
 
