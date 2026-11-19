@@ -16,7 +16,8 @@
 //!   `with_extension` to simulate more call details; the contexts are
 //!   read-only otherwise); [`authenticated_request`] / [`public_request`] build the
 //!   `tonic::Request` that macro-rewritten handlers take.
-//! - **Live-server tests:** [`test_validator`], [`test_token`],
+//! - **Live-server tests:** [`TestServer`] starts an isolated loopback server.
+//!   Use [`test_validator`], [`test_token`],
 //!   [`expired_test_token`], and the conformance checks
 //!   [`assert_policy_table_conforms`] (start here),
 //!   [`assert_service_conforms`], [`assert_all_rpcs_require_auth`],
@@ -55,6 +56,7 @@ mod conformance;
 mod health;
 mod metrics;
 mod requests;
+mod server;
 mod spans;
 #[cfg(test)]
 mod tests;
@@ -70,6 +72,7 @@ pub use metrics::{CounterSnapshot, HistogramSnapshot, InMemory};
 pub use requests::{authenticated_request, public_request};
 pub use rust_auth_lib::test_fixtures;
 pub use rust_auth_lib::test_fixtures::KeycloakClaimsBuilder;
+pub use server::{TestServer, TestServerBuilder};
 pub use spans::{SpanCapture, SpanRecord, capture_spans};
 pub use tokens::{expired_test_token, test_token, test_validator};
 
