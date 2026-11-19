@@ -15,8 +15,8 @@
 //! Modules (`#[cfg(test)]`, so not linkable): `compile_fail` (trybuild
 //! diagnostics), `access_controlled_service_macro` (expansion, no server),
 //! `method_name_matching` (macro-emitted names against the gate's lookup),
-//! `access_gate`, `server_builder`, `trace_layer` (live servers), and
-//! `support` (shared helpers).
+//! `access_gate`, `server_builder`, `telemetry`, `trace_layer` (live servers),
+//! and `support` (shared helpers).
 //!
 //! # Proto fixtures
 //!
@@ -65,5 +65,7 @@ mod method_name_matching;
 mod server_builder;
 #[cfg(test)]
 mod support;
+#[cfg(test)]
+mod telemetry;
 #[cfg(test)]
 mod trace_layer;
