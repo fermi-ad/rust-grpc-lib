@@ -143,4 +143,11 @@ pub mod __private {
     pub use ::prost;
     pub use ::tonic;
     pub use ::tonic_prost;
+
+    /// Exact wire method names routed by a generated server.
+    #[doc(hidden)]
+    pub trait WireMethods {
+        /// Canonical `package.Service/Method` paths, without the leading slash.
+        const WIRE_METHODS: &'static [&'static str];
+    }
 }

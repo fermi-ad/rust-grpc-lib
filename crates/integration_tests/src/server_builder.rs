@@ -7,6 +7,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::time::{sleep, timeout};
 
+use rust_grpc_lib::__private::WireMethods;
 use rust_grpc_lib::access_controlled_service;
 use rust_grpc_lib::auth::{KeyValidator, RequestContext};
 use rust_grpc_lib::server::{GrpcServer, GrpcServerBuilder, ServeError};
@@ -48,6 +49,17 @@ impl ExampleDb for Stub {
 
 fn builder() -> GrpcServerBuilder<KeyValidator> {
     GrpcServer::builder(make_validator()).add_service(ExampleDbServer::new, Stub)
+}
+
+#[test]
+fn generated_server_exposes_exact_wire_methods() {
+    assert_eq!(
+        <ExampleDbServer<Stub> as WireMethods>::WIRE_METHODS,
+        [
+            "services.example.ExampleDB/getEndPointOne",
+            "services.example.ExampleDB/getEndPointTwo",
+        ]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

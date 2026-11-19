@@ -3,8 +3,8 @@
 //!
 //! Covers: each tonic-build path shape that must be rewritten, every shape that
 //! must be left alone (identifier boundaries, qualified paths, comments),
-//! idempotence, and the file-level behavior (line endings, missing files,
-//! untouched neighbors).
+//! server wire method metadata, idempotence, and file-level behavior (line
+//! endings, missing files, untouched neighbors).
 
 use std::{env, fs, path::PathBuf, process};
 
@@ -277,6 +277,99 @@ fn rewrites_the_files_of_the_given_packages() {
         dir.read("services.example.rs"),
         format!("x: {QUALIFIED}Status\r\ny: {QUALIFIED}Code")
     );
+}
+
+#[test]
+fn emits_wire_methods_from_server_arms_only_and_is_idempotent() {
+    let dir = Scratch::new("wire-methods");
+    let source = r#"pub mod example_db_client {
+    let path = http::uri::PathAndQuery::from_static("/pkg.ExampleDB/GetURL");
+    "/pkg.ExampleDB/ClientOnly" => {
+}
+// pub mod decoy_server {
+pub mod example_db_server {
+    // "/pkg.ExampleDB/CommentOnly" => {
+    /// "/pkg.ExampleDB/DocOnly" => {
+                "/pkg.ExampleDB/GetURL" => {
+                "/pkg.ExampleDB/readValue" => {
+    impl<T> tonic::server::NamedService for ExampleDbServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+"#;
+    let expected = r#"    impl<T> ::rust_grpc_lib::__private::WireMethods for ExampleDbServer<T> {
+        const WIRE_METHODS: &'static [&'static str] = &[
+            "pkg.ExampleDB/GetURL",
+            "pkg.ExampleDB/readValue",
+        ];
+    }
+"#;
+    let anchor = "    impl<T> tonic::server::NamedService for ExampleDbServer<T> {";
+    let qualified_anchor =
+        format!("    impl<T> {QUALIFIED}server::NamedService for ExampleDbServer<T> {{");
+    dir.write("pkg.rs", source);
+    let packages = ["pkg".to_string()];
+
+    rewrite_generated_files(&dir.0, &packages).expect("rewrite succeeds");
+    let once = dir.read("pkg.rs");
+    assert_eq!(
+        once,
+        source.replace(anchor, &format!("{expected}{qualified_anchor}"))
+    );
+
+    rewrite_generated_files(&dir.0, &packages).expect("second rewrite succeeds");
+    assert_eq!(dir.read("pkg.rs"), once);
+}
+
+#[test]
+fn keeps_methods_separate_and_preserves_crlf_in_an_escaped_package() {
+    let dir = Scratch::new("wire-methods-crlf");
+    let source = concat!(
+        "pub mod first_server {\n",
+        "                \"/demo.self.First/FirstRPC\" => {\n",
+        "    impl<T> tonic::server::NamedService for FirstServer<T> {\n",
+        "    }\n",
+        "}\n",
+        "pub mod unrelated {\n",
+        "                \"/demo.self.Empty/NotRouted\" => {\n",
+        "}\n",
+        "pub mod empty_server {\n",
+        "    impl<T> tonic::server::NamedService for EmptyServer<T> {\n",
+        "    }\n",
+        "}\n",
+    );
+    let expected = [
+        "pub mod first_server {",
+        "                \"/demo.self.First/FirstRPC\" => {",
+        "    impl<T> ::rust_grpc_lib::__private::WireMethods for FirstServer<T> {",
+        "        const WIRE_METHODS: &'static [&'static str] = &[",
+        "            \"demo.self.First/FirstRPC\",",
+        "        ];",
+        "    }",
+        &format!("    impl<T> {QUALIFIED}server::NamedService for FirstServer<T> {{"),
+        "    }",
+        "}",
+        "pub mod unrelated {",
+        "                \"/demo.self.Empty/NotRouted\" => {",
+        "}",
+        "pub mod empty_server {",
+        "    impl<T> ::rust_grpc_lib::__private::WireMethods for EmptyServer<T> {",
+        "        const WIRE_METHODS: &'static [&'static str] = &[];",
+        "    }",
+        &format!("    impl<T> {QUALIFIED}server::NamedService for EmptyServer<T> {{"),
+        "    }",
+        "}",
+        "",
+    ]
+    .join("\r\n");
+    dir.write("demo.self_.rs", &source.replace('\n', "\r\n"));
+    let packages = ["demo.self".to_string()];
+
+    rewrite_generated_files(&dir.0, &packages).expect("rewrite succeeds");
+    assert_eq!(dir.read("demo.self_.rs"), expected);
+
+    rewrite_generated_files(&dir.0, &packages).expect("second rewrite succeeds");
+    assert_eq!(dir.read("demo.self_.rs"), expected);
 }
 
 #[test]

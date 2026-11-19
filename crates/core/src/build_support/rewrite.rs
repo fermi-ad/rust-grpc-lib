@@ -5,7 +5,8 @@
 //! tonic-build writes every tonic path as `tonic::...`, with no leading `::`
 //! and no option to change the prefix, so the paths are rewritten in the
 //! generated files, line by line. (The codec and prost paths do have options;
-//! see `compile`.) Entry points: [`qualify_tonic_paths`] and
+//! see `compile`.) The same pass emits wire method metadata from the generated
+//! server routing arms. Entry points: [`qualify_tonic_paths`] and
 //! [`rewrite_generated_files`].
 
 use std::{
@@ -36,6 +37,9 @@ static TONIC_PATH_START: LazyLock<Regex> =
 // Where `tonic` lives from a consumer's point of view: `rust-grpc-lib`
 // re-exports it under `__private`.
 const REPLACEMENT: &str = "${1}::rust_grpc_lib::__private::tonic::";
+const NAMED_SERVICE_IMPL: &str =
+    "    impl<T> ::rust_grpc_lib::__private::tonic::server::NamedService for ";
+const WIRE_METHODS_IMPL: &str = "    impl<T> ::rust_grpc_lib::__private::WireMethods for ";
 
 /// Rewrites each path-start `tonic::` in `line` to
 /// `::rust_grpc_lib::__private::tonic::`, returning `line` itself if there is
@@ -59,9 +63,10 @@ pub(super) fn qualify_tonic_paths(line: &str) -> Cow<'_, str> {
     TONIC_PATH_START.replace_all(line, REPLACEMENT)
 }
 
-/// Applies [`qualify_tonic_paths`] to the files tonic-build generated in
-/// `out_dir` for `packages` (proto package names), plus `google.protobuf.rs`
-/// when it exists. No other file in `out_dir` is read or written.
+/// Qualifies tonic paths and emits server wire method metadata in the files
+/// tonic-build generated in `out_dir` for `packages` (proto package names),
+/// plus `google.protobuf.rs` when it exists. No other file in `out_dir` is read
+/// or written.
 ///
 /// Fails, naming the file, if a package's file is missing or a file cannot be
 /// read or written.
@@ -93,12 +98,23 @@ fn rewrite_file(path: &Path) -> io::Result<()> {
     let mut writer = BufWriter::new(File::create(temp_path)?);
 
     let mut line = String::new();
+    let mut server = None;
     loop {
         line.clear();
         if reader.read_line(&mut line)? == 0 {
             break;
         }
-        writer.write_all(qualify_tonic_paths(&line).as_bytes())?;
+        let qualified = qualify_tonic_paths(&line);
+        let text = qualified.trim_end_matches(['\r', '\n']);
+        // tonic-build emits service modules at file scope, with unindented
+        // opening and closing lines.
+        if text.starts_with("pub mod ") || text == "}" {
+            server = (text.starts_with("pub mod ") && text.ends_with("_server {"))
+                .then(ServerMethods::default);
+        } else if let Some(server) = &mut server {
+            server.rewrite_line(text, &qualified[text.len()..], &mut writer)?;
+        }
+        writer.write_all(qualified.as_bytes())?;
     }
     writer.flush()?;
 
@@ -106,6 +122,56 @@ fn rewrite_file(path: &Path) -> io::Result<()> {
     drop(writer);
 
     fs::rename(temp_path, path)
+}
+
+#[derive(Default)]
+struct ServerMethods {
+    paths: Vec<String>,
+    emitted: bool,
+}
+
+impl ServerMethods {
+    fn rewrite_line(
+        &mut self,
+        text: &str,
+        ending: &str,
+        writer: &mut impl Write,
+    ) -> io::Result<()> {
+        // An existing impl precedes the NamedService anchor on subsequent runs.
+        if text.starts_with(WIRE_METHODS_IMPL) {
+            self.emitted = true;
+        } else if let Some(path) = text
+            .trim_start()
+            .strip_prefix("\"/")
+            .and_then(|arm| arm.strip_suffix("\" => {"))
+        {
+            self.paths.push(path.to_owned());
+        } else if !self.emitted
+            && let Some(name) = text
+                .strip_prefix(NAMED_SERVICE_IMPL)
+                .and_then(|tail| tail.strip_suffix("<T> {"))
+        {
+            self.write_impl(name, ending, writer)?;
+            self.emitted = true;
+        }
+        Ok(())
+    }
+
+    fn write_impl(&self, name: &str, ending: &str, writer: &mut impl Write) -> io::Result<()> {
+        write!(writer, "{WIRE_METHODS_IMPL}{name}<T> {{{ending}")?;
+        write!(
+            writer,
+            "        const WIRE_METHODS: &'static [&'static str] = &["
+        )?;
+        if !self.paths.is_empty() {
+            write!(writer, "{ending}")?;
+            for path in &self.paths {
+                write!(writer, "            \"{path}\",{ending}")?;
+            }
+            write!(writer, "        ")?;
+        }
+        write!(writer, "];{ending}    }}{ending}")
+    }
 }
 
 fn describe(path: &Path, error: &io::Error) -> String {
