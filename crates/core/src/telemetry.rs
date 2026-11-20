@@ -1,41 +1,6 @@
-//! OpenTelemetry support for gRPC server metrics.
-//!
-//! Use [`TelemetryConfig::from_env`] to read deployment settings, then apply
-//! setters to override them. Use [`TelemetryConfig::default`] to start without
-//! reading configuration from the environment. Each enabled [`Telemetry`]
-//! owns a provider; cloning shares that provider without installing it globally.
-//! Export uses OTLP/HTTP when an endpoint is configured. Without an endpoint,
-//! with the SDK disabled, or on exporter setup failure, the server uses a
-//! no-op meter but still tracks calls and invokes any observer. Use
-//! [`without_telemetry`](crate::server::GrpcServerBuilder::without_telemetry)
-//! to remove tracking and observation altogether.
-//!
-//! The server flushes providers it starts. If you pass your own instance with
-//! [`GrpcServerBuilder::telemetry`](crate::server::GrpcServerBuilder::telemetry),
-//! call [`Telemetry::shutdown`] after all users finish. The provider shutdown
-//! wait (up to five seconds) is separate from the server's connection drain.
-//!
-//! Both `rpc.server.call.duration` and `rpc.server.active_requests` use
-//! `rpc.system.name = "grpc"` and the canonical `package.Service/Method` as
-//! `rpc.method` (`_OTHER` for unlisted paths). The duration histogram measures
-//! seconds and deliberately uses a numeric `rpc.response.status_code` and,
-//! for non-OK codes only, tonic's code name (such as `PermissionDenied`) as
-//! `error.type`, rather than the string conventions in OpenTelemetry v1.37.
-//! The existing `rpc` trace span is unchanged: it uses `rpc.system`, a separate
-//! `rpc.service`, the method segment alone as `rpc.method`, and `grpc.status`
-//! with tonic's debug name (such as `Ok`).
-//!
-//! With metrics enabled, serving starts a runtime probe that records
-//! `runtime.scheduling_delay` in seconds using the configured duration buckets.
-//! Servers sharing a [`Telemetry`] share one probe, running on the first
-//! server's runtime. On a multi-threaded runtime the probe samples whichever
-//! worker runs it; it detects broad starvation, not a single blocked worker.
-//! Disable it with [`TelemetryConfig::runtime_probe`] or `GRPC_RUNTIME_PROBE=false`.
-//!
-//! A call completion observer receives a [`CallSummary`] exactly once per
-//! tracked call, including cancellations. It runs on the serving path after
-//! the built-in metrics are recorded, so it must be cheap and non-blocking.
-//! Observer panics are caught and logged without changing the call outcome.
+//! OpenTelemetry metrics for gRPC calls and runtime scheduling delay.
+//! Configure OTLP/HTTP export with [`TelemetryConfig`] and share a provider via
+//! [`Telemetry`] without installing it globally.
 
 use std::sync::{Arc, Mutex};
 
@@ -48,9 +13,8 @@ use opentelemetry_sdk::{
     metrics::{SdkMeterProvider, reader::MetricReader},
 };
 
-use self::{buckets::validate_buckets, config::ExportMode, exporter::ShutdownRequest};
+use self::exporter::ProviderShutdownSender;
 
-mod buckets;
 mod call;
 mod config;
 mod exporter;
@@ -61,18 +25,14 @@ pub(crate) mod recorder;
 #[cfg(test)]
 mod tests;
 
-pub use buckets::DEFAULT_DURATION_BUCKETS;
 pub use call::CallSummary;
-pub use config::TelemetryConfig;
+pub use config::{DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS, TelemetryConfig};
 pub use opentelemetry;
 
 const METER_NAME: &str = "rust_grpc_lib";
 const LOG_TARGET: &str = "rust_grpc_lib::telemetry";
 
-/// An explicitly owned metrics pipeline and its meter.
-///
-/// Independent instances do not share providers. Clones share the same
-/// pipeline, including its shutdown state.
+/// Clones share a meter and shutdown state.
 #[derive(Clone)]
 pub struct Telemetry {
     inner: Arc<TelemetryInner>,
@@ -80,143 +40,121 @@ pub struct Telemetry {
 
 struct TelemetryInner {
     meter: Meter,
-    bounds: Vec<f64>,
+    duration_bounds_seconds: Vec<f64>,
     runtime_probe: bool,
     lifecycle: Mutex<Lifecycle>,
 }
 
 struct Lifecycle {
-    shutdown: Option<ShutdownRequest>,
-    probe: Option<probe::Running>,
+    provider_shutdown: Option<ProviderShutdownSender>,
+    probe: Option<probe::RunningProbe>,
 }
 
 impl Telemetry {
-    /// Read server metrics settings from the environment and start telemetry.
+    /// Needs no Tokio runtime or live collector. The meter is a no-op if the
+    /// SDK is disabled, no endpoint is set, or exporter setup fails.
     ///
-    /// Like [`Self::start`], this works with or without a Tokio runtime.
-    #[must_use = "keep the telemetry handle to use its meter and shut down its provider"]
-    pub fn from_env() -> Self {
-        Self::start(TelemetryConfig::from_env())
-    }
-
-    /// Start telemetry from resolved settings, with or without a Tokio runtime.
+    /// ```
+    /// use rust_grpc_lib::telemetry::{Telemetry, TelemetryConfig};
     ///
-    /// An enabled endpoint starts an OTLP/HTTP exporter on a background
-    /// pipeline. No connection is required at startup. If the SDK is disabled,
-    /// no endpoint is set, or setup fails, this returns a no-op meter.
+    /// let telemetry = Telemetry::start(TelemetryConfig::from_env());
+    /// let meter = telemetry.meter();
+    /// ```
     #[must_use = "keep the telemetry handle to use its meter and shut down its provider"]
     pub fn start(config: TelemetryConfig) -> Self {
-        let ExportMode::Otlp(endpoint) = config.export_mode() else {
+        let Some(endpoint) = config.export_endpoint().map(str::to_owned) else {
             return Self::noop(config.duration_buckets);
         };
-        let endpoint = endpoint.to_owned();
         let interval = config.export_interval;
         Self::start_with_reader(move || exporter::otlp_reader(&endpoint, interval), config)
     }
 
-    /// Create a no-op meter with the default duration bounds and no exporter.
-    #[must_use = "this returns a no-op telemetry handle without changing any existing provider"]
-    pub fn disabled() -> Self {
-        Self::noop(DEFAULT_DURATION_BUCKETS.to_vec())
-    }
-
-    /// Whether this instance has a real provider that has not begun shutdown.
+    /// Whether a real provider is running, as opposed to a no-op meter.
     #[must_use = "this only reports whether the provider is active"]
     pub fn is_enabled(&self) -> bool {
-        self.inner.lifecycle.lock().unwrap().shutdown.is_some()
+        self.inner
+            .lifecycle
+            .lock()
+            .unwrap()
+            .provider_shutdown
+            .is_some()
     }
 
-    /// Get a cheap clone of the meter, which does not export when disabled.
+    /// The meter to create instruments on.
     #[must_use = "use the returned meter to create instruments"]
     pub fn meter(&self) -> Meter {
         self.inner.meter.clone()
     }
 
-    /// Build a seconds-unit histogram with the configured duration bounds.
+    /// A histogram in seconds that uses the configured duration bounds.
     #[must_use = "use the returned histogram to record durations"]
     pub fn duration_histogram(
         &self,
         name: &'static str,
         description: &'static str,
     ) -> Histogram<f64> {
-        self.build_histogram(name, description, &self.inner.bounds)
+        self.inner
+            .meter
+            .f64_histogram(name)
+            .with_description(description)
+            .with_unit("s")
+            .with_boundaries(self.inner.duration_bounds_seconds.clone())
+            .build()
     }
 
-    /// Build a seconds-unit histogram with bounds for this instrument only.
+    /// Waits up to five seconds for flush. Only the first caller waits; cleanup
+    /// continues after a timeout or when the last handle drops without calling this.
     ///
-    /// Invalid bounds warn and fall back to [`DEFAULT_DURATION_BUCKETS`].
-    #[must_use = "use the returned histogram to record durations"]
-    pub fn duration_histogram_with(
-        &self,
-        name: &'static str,
-        description: &'static str,
-        bounds: &[f64],
-    ) -> Histogram<f64> {
-        let bounds = if validate_buckets(bounds) {
-            bounds
-        } else {
-            tracing::warn!(target: LOG_TARGET, "invalid duration buckets; using defaults");
-            &DEFAULT_DURATION_BUCKETS
-        };
-        self.build_histogram(name, description, bounds)
-    }
-
-    /// Stop the runtime probe, then flush and stop the shared provider,
-    /// waiting at most five seconds for the provider.
+    /// # Panics
     ///
-    /// Requires a Tokio runtime with time enabled when an active provider is
-    /// present. Only the first call starts shutdown; calls on other clones do
-    /// not wait. If the wait times out, cleanup continues in the background.
-    /// Dropping the last handle without calling this starts best-effort cleanup
-    /// without waiting for it.
+    /// Shutting down an active provider requires a Tokio runtime with time enabled.
     pub async fn shutdown(self) {
         let request = {
             let mut lifecycle = self.inner.lifecycle.lock().unwrap();
             drop(lifecycle.probe.take());
-            lifecycle.shutdown.take()
+            lifecycle.provider_shutdown.take()
         };
         if let Some(request) = request {
-            exporter::shutdown(request).await;
+            exporter::flush_and_shutdown_provider(request).await;
         }
     }
 
-    pub(crate) fn start_runtime_probe(&self) -> Option<probe::Serving> {
+    pub(crate) fn attach_runtime_probe(&self) -> Option<probe::ServerGuard> {
         let mut lifecycle = self.inner.lifecycle.lock().unwrap();
-        if !self.inner.runtime_probe || lifecycle.shutdown.is_none() {
+        if !self.inner.runtime_probe || lifecycle.provider_shutdown.is_none() {
             return None;
         }
-        let running = lifecycle.probe.get_or_insert_with(|| {
-            probe::Running::start(self.duration_histogram(
+        let running_probe = lifecycle.probe.get_or_insert_with(|| {
+            probe::RunningProbe::start(self.duration_histogram(
                 "runtime.scheduling_delay",
                 "How late the Tokio runtime wakes a fixed-period timer",
             ))
         });
-        running.servers += 1;
-        Some(probe::Serving(self.clone()))
+        running_probe.attached_servers += 1;
+        Some(probe::ServerGuard(self.clone()))
     }
 
     #[cfg(test)]
-    pub(crate) fn runtime_probe_servers(&self) -> usize {
+    pub(crate) fn runtime_probe_server_count(&self) -> usize {
         self.inner
             .lifecycle
             .lock()
             .unwrap()
             .probe
             .as_ref()
-            .map_or(0, |probe| probe.servers)
+            .map_or(0, |probe| probe.attached_servers)
     }
 
-    // C12 also uses this path to install an in-memory reader.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn from_reader(reader: impl MetricReader, config: TelemetryConfig) -> Self {
         Self::start_with_reader(move || Ok(reader), config)
     }
 
     fn start_with_reader<R: MetricReader>(
-        reader: impl FnOnce() -> Result<R, &'static str> + Send + 'static,
+        build_reader: impl FnOnce() -> Result<R, &'static str> + Send + 'static,
         config: TelemetryConfig,
     ) -> Self {
-        let runtime_probe = config.runtime_probe_enabled(true);
+        let runtime_probe = config.runtime_probe;
         // The SDK reads OTEL_RESOURCE_ATTRIBUTES. The resolved config wins
         // for service.name and, if explicitly provided, service.version.
         let mut resource =
@@ -226,9 +164,9 @@ impl Telemetry {
         }
         let resource = resource.build();
         let bounds = config.duration_buckets;
-        match exporter::start(move || {
+        match exporter::start_provider_worker(move || {
             Ok(SdkMeterProvider::builder()
-                .with_reader(reader()?)
+                .with_reader(build_reader()?)
                 .with_resource(resource)
                 .build())
         }) {
@@ -250,35 +188,20 @@ impl Telemetry {
 
     fn new(
         meter: Meter,
-        bounds: Vec<f64>,
+        duration_bounds_seconds: Vec<f64>,
         runtime_probe: bool,
-        shutdown: Option<ShutdownRequest>,
+        provider_shutdown: Option<ProviderShutdownSender>,
     ) -> Self {
         Self {
             inner: Arc::new(TelemetryInner {
                 meter,
-                bounds,
+                duration_bounds_seconds,
                 runtime_probe,
                 lifecycle: Mutex::new(Lifecycle {
-                    shutdown,
+                    provider_shutdown,
                     probe: None,
                 }),
             }),
         }
-    }
-
-    fn build_histogram(
-        &self,
-        name: &'static str,
-        description: &'static str,
-        bounds: &[f64],
-    ) -> Histogram<f64> {
-        self.inner
-            .meter
-            .f64_histogram(name)
-            .with_description(description)
-            .with_unit("s")
-            .with_boundaries(bounds.to_vec())
-            .build()
     }
 }

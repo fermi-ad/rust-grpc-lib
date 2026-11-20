@@ -2,38 +2,38 @@
 
 use super::*;
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Mutex;
 
-#[derive(Clone, Default)]
-struct Collector(Rc<RefCell<Vec<CallSummary>>>);
+use tokio::sync::watch;
 
-impl Sink for Collector {
-    fn started(&self, _method: Option<&'static str>) {}
-
-    fn finished(&self, summary: CallSummary) {
-        self.0.borrow_mut().push(summary);
-    }
-}
+use crate::telemetry::{Telemetry, TelemetryConfig};
 
 #[test]
 fn transfer_preserves_start_time_and_only_one_terminal_status() {
-    let sink = Collector::default();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&seen);
+    let recorder = Arc::new(CallRecorder::new(
+        &Telemetry::start(TelemetryConfig::default()),
+        Some(Arc::new(move |summary| {
+            observed.lock().unwrap().push(*summary)
+        })),
+        watch::channel(()).1,
+    ));
     let elapsed = Duration::from_millis(25);
     let mut future = CompletionGuard::new(
-        sink.clone(),
+        recorder,
         Some("pkg.Service/Method"),
         Instant::now() - elapsed,
     );
-    let mut body = future.transfer();
+    let mut body = future.take_completion();
     drop(future);
-    assert!(sink.0.borrow().is_empty());
+    assert!(seen.lock().unwrap().is_empty());
 
     body.finish(Code::Ok);
     body.finish(Code::Unknown);
     drop(body);
 
-    let seen = sink.0.borrow();
+    let seen = seen.lock().unwrap();
     let [summary] = seen.as_slice() else {
         panic!("expected one completion, got {seen:?}");
     };

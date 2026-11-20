@@ -6,7 +6,7 @@ use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
 use crate::auth::{Access, MethodPolicy, ServicePolicy};
 
-use super::{HEALTH_METHODS, LOG_TARGET, LabelIndex, MethodLabels, PolicyTable};
+use super::{HEALTH_METHODS, LOG_TARGET, MethodLabelIndex, PolicyTable};
 
 const WIRE_METHODS: &[&str] = &[
     "pkg.Service/getEndPointOne",
@@ -23,13 +23,13 @@ impl ServicePolicy<()> for Service {
     ];
 }
 
-fn index() -> LabelIndex {
-    let mut index = LabelIndex::new();
-    index.register(MethodLabels {
-        service_name: "pkg.Service",
-        wire_methods: WIRE_METHODS,
-        table: PolicyTable::of::<(), Service>(),
-    });
+fn index() -> MethodLabelIndex {
+    let mut index = MethodLabelIndex::new();
+    index.register(
+        "pkg.Service",
+        WIRE_METHODS,
+        PolicyTable::of::<(), Service>(),
+    );
     index
 }
 
@@ -40,7 +40,7 @@ fn only_exact_registered_paths_with_policies_resolve() {
     // the wire metadata, not the request.
     for wire in &WIRE_METHODS[..2] {
         let path = format!("/{wire}");
-        let label = index.resolve(&path).unwrap();
+        let label = index.label_for_path(&path).unwrap();
         assert_eq!(label, *wire);
         assert_eq!(label.as_ptr(), wire.as_ptr());
     }
@@ -62,23 +62,23 @@ fn only_exact_registered_paths_with_policies_resolve() {
         "/pkg.Service/NoPolicy",
         "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
     ] {
-        assert_eq!(index.resolve(path), None, "accepted {path:?}");
+        assert_eq!(index.label_for_path(path), None, "accepted {path:?}");
     }
 }
 
 #[test]
 fn health_paths_resolve_without_a_policy_table() {
-    let index = LabelIndex::new();
+    let index = MethodLabelIndex::new();
     assert_eq!(
-        index.resolve("/grpc.health.v1.Health/Check"),
+        index.label_for_path("/grpc.health.v1.Health/Check"),
         Some(HEALTH_METHODS[0])
     );
     assert_eq!(
-        index.resolve("/grpc.health.v1.Health/Watch"),
+        index.label_for_path("/grpc.health.v1.Health/Watch"),
         Some(HEALTH_METHODS[1])
     );
-    assert_eq!(index.resolve("/grpc.health.v1.Health/check"), None);
-    assert_eq!(index.resolve("/grpc.health.v1.Health/List"), None);
+    assert_eq!(index.label_for_path("/grpc.health.v1.Health/check"), None);
+    assert_eq!(index.label_for_path("/grpc.health.v1.Health/List"), None);
 }
 
 #[test]
@@ -107,25 +107,25 @@ fn missing_and_ambiguous_policies_warn_at_registration_only() {
             })
         };
         let mut index = index();
-        index.register(MethodLabels {
-            service_name: "pkg.Other",
-            wire_methods: &[
+        index.register(
+            "pkg.Other",
+            &[
                 "pkg.Other/getEndPointOne",
                 "pkg.Other/GetEndPointOne",
                 "pkg.Foreign/GetBPMList",
             ],
-            table: PolicyTable::of::<(), Service>(),
-        });
+            PolicyTable::of::<(), Service>(),
+        );
         assert_eq!(warning_count(), 2, "one missing and one ambiguous policy");
         for path in [
             "/pkg.Other/getEndPointOne",
             "/pkg.Other/GetEndPointOne",
             "/pkg.Foreign/GetBPMList",
         ] {
-            assert_eq!(index.resolve(path), None);
+            assert_eq!(index.label_for_path(path), None);
         }
         assert_eq!(
-            index.resolve("/pkg.Service/getEndPointOne"),
+            index.label_for_path("/pkg.Service/getEndPointOne"),
             Some(WIRE_METHODS[0])
         );
         assert_eq!(warning_count(), 2, "no additional warnings during lookup");
@@ -144,11 +144,11 @@ fn arbitrary_paths_cannot_expand_the_label_set() {
             3 => format!("/pkg.Service/{n:x}"),
             _ => format!("//{n}/"),
         };
-        labels.insert(index.resolve(&path));
+        labels.insert(index.label_for_path(&path));
     }
     assert_eq!(labels, HashSet::from([None]));
     for wire in WIRE_METHODS.iter().chain(&HEALTH_METHODS) {
-        labels.insert(index.resolve(&format!("/{wire}")));
+        labels.insert(index.label_for_path(&format!("/{wire}")));
     }
     assert!(labels.len() <= WIRE_METHODS.len() + HEALTH_METHODS.len() + 1);
 }

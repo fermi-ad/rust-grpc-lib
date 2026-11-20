@@ -11,45 +11,27 @@ use tonic::Status;
 use tonic::codegen::{Bytes, http::HeaderValue};
 use tower::service_fn;
 
-use super::super::call::CallSummary;
 use crate::auth::{Access, MethodPolicy, PolicyTable, ServicePolicy};
-use crate::telemetry::label::MethodLabels;
+use crate::telemetry::{CallSummary, TelemetryConfig};
 
 const METHOD: &str = "pkg.Service/getValue";
 const PATH: &str = "/pkg.Service/getValue";
 
+/// Records completions seen by the call observer.
 #[derive(Clone, Default)]
-struct Collector(Arc<Mutex<Vec<Event>>>);
-
-#[derive(Debug, PartialEq, Eq)]
-enum Event {
-    Started(Option<&'static str>),
-    Finished(Option<&'static str>, Code),
-}
-
-impl Sink for Collector {
-    fn started(&self, method: Option<&'static str>) {
-        self.0.lock().unwrap().push(Event::Started(method));
-    }
-
-    fn finished(&self, summary: CallSummary) {
-        self.0
-            .lock()
-            .unwrap()
-            .push(Event::Finished(summary.method, summary.status));
-    }
-}
+struct Collector(Arc<Mutex<Vec<CallSummary>>>);
 
 impl Collector {
     fn assert_open(&self) {
-        assert_eq!(*self.0.lock().unwrap(), [Event::Started(Some(METHOD))]);
+        assert!(self.0.lock().unwrap().is_empty());
     }
 
     fn assert_finished(&self, method: Option<&'static str>, status: Code) {
-        assert_eq!(
-            *self.0.lock().unwrap(),
-            [Event::Started(method), Event::Finished(method, status)]
-        );
+        let seen = self.0.lock().unwrap();
+        let [summary] = seen.as_slice() else {
+            panic!("expected one completion, got {seen:?}");
+        };
+        assert_eq!((summary.method, summary.status), (method, status));
     }
 }
 
@@ -90,15 +72,24 @@ impl ServicePolicy<()> for TestPolicy {
     const POLICIES: &'static [MethodPolicy] = &[MethodPolicy::new("get_value", Access::Public)];
 }
 
-fn tracker() -> (CallLayer<Collector>, Collector) {
-    let mut labels = LabelIndex::new();
-    labels.register(MethodLabels {
-        service_name: "pkg.Service",
-        wire_methods: &[METHOD],
-        table: PolicyTable::of::<(), TestPolicy>(),
-    });
+fn tracker() -> (CallLayer, Collector) {
+    let mut labels = MethodLabelIndex::new();
+    labels.register(
+        "pkg.Service",
+        &[METHOD],
+        PolicyTable::of::<(), TestPolicy>(),
+    );
     let sink = Collector::default();
-    (CallLayer::new(labels, sink.clone()), sink)
+    let observed = sink.clone();
+    let layer = CallLayer::new(
+        &Telemetry::start(TelemetryConfig::default()),
+        labels,
+        Some(Arc::new(move |summary| {
+            observed.0.lock().unwrap().push(*summary)
+        })),
+        watch::channel(()).1,
+    );
+    (layer, sink)
 }
 
 fn request(path: &str) -> Request<()> {

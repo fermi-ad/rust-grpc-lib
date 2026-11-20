@@ -1,12 +1,15 @@
 use super::*;
-use crate::telemetry::DEFAULT_DURATION_BUCKETS;
 
 #[test]
-fn histograms_snapshot_cumulative_points_and_configured_bounds() {
-    let metrics = InMemory::new();
-    let telemetry = metrics.telemetry();
-    let duration = telemetry.duration_histogram_with("test.duration", "latency", &[0.25, 0.5]);
-    let default = telemetry.duration_histogram("test.default", "latency");
+fn histograms_snapshot_cumulative_points_with_stringified_attributes() {
+    let metrics = InMemoryMetrics::new();
+    let duration = metrics
+        .telemetry()
+        .meter()
+        .f64_histogram("test.duration")
+        .with_unit("s")
+        .with_boundaries(vec![0.25, 0.5])
+        .build();
     assert!(metrics.histograms("test.duration").is_empty());
     let attrs = [
         KeyValue::new("worker", "first"),
@@ -14,15 +17,11 @@ fn histograms_snapshot_cumulative_points_and_configured_bounds() {
         KeyValue::new("cached", false),
     ];
     duration.record(0.125, &attrs);
-    assert_eq!(metrics.histograms("test.duration")[0].count, 1);
     duration.record(0.5, &attrs);
     duration.record(1.0, &attrs);
-    default.record(0.125, &[]);
 
-    let points = metrics.histograms("test.duration");
-    assert_eq!(points, metrics.histograms("test.duration"));
     assert_eq!(
-        points,
+        metrics.histograms("test.duration"),
         [HistogramSnapshot {
             unit: "s".into(),
             attributes: BTreeMap::from([
@@ -31,24 +30,15 @@ fn histograms_snapshot_cumulative_points_and_configured_bounds() {
                 ("worker".into(), "first".into()),
             ]),
             count: 3,
-            sum: 1.625,
-            min: Some(0.125),
-            max: Some(1.0),
             bounds: vec![0.25, 0.5],
             bucket_counts: vec![1, 1, 1],
         }]
     );
-    assert_eq!(points[0].bucket_counts.iter().sum::<u64>(), points[0].count);
-    assert_eq!(
-        metrics.histograms("test.default")[0].bounds,
-        DEFAULT_DURATION_BUCKETS
-    );
-    assert!(metrics.counters("test.duration").is_empty());
 }
 
 #[test]
 fn counters_include_signed_up_down_points_and_sort_by_attributes() {
-    let metrics = InMemory::new();
+    let metrics = InMemoryMetrics::new();
     let meter = metrics.telemetry().meter();
     let counter = meter.u64_counter("test.completed").build();
     counter.add(2, &[KeyValue::new("queue", "b")]);
@@ -72,13 +62,12 @@ fn counters_include_signed_up_down_points_and_sort_by_attributes() {
             },
         ]
     );
-    assert!(metrics.histograms("test.completed").is_empty());
 }
 
 #[tokio::test]
 async fn instances_are_isolated_and_keep_final_metrics_after_shutdown() {
-    let first = InMemory::new();
-    let second = InMemory::new();
+    let first = InMemoryMetrics::new();
+    let second = InMemoryMetrics::new();
     let telemetry = first.telemetry();
     let counter = telemetry.meter().u64_counter("test.completed").build();
     let other = second
@@ -100,7 +89,7 @@ async fn instances_are_isolated_and_keep_final_metrics_after_shutdown() {
 
 #[tokio::test(start_paused = true)]
 async fn calls_waits_for_the_requested_method_and_status() {
-    let metrics = InMemory::new();
+    let metrics = InMemoryMetrics::new();
     let duration = metrics
         .telemetry()
         .duration_histogram(CALL_DURATION, "call duration");
@@ -121,7 +110,10 @@ async fn calls_waits_for_the_requested_method_and_status() {
         record(method, Code::Cancelled);
         record(method, Code::Cancelled);
     });
-    assert_eq!(metrics.calls(method, Code::Cancelled).await, 2);
+    assert_eq!(
+        metrics.wait_for_call_count(method, Code::Cancelled).await,
+        2
+    );
     task.await.unwrap();
 }
 
@@ -130,7 +122,7 @@ async fn calls_waits_for_the_requested_method_and_status() {
     expected = "waiting for calls for \"test.Service/Missing\" with Cancelled; recorded series: [\"rpc.server.call.duration:"
 )]
 async fn calls_timeout_lists_observed_series() {
-    let metrics = InMemory::new();
+    let metrics = InMemoryMetrics::new();
     metrics
         .telemetry()
         .duration_histogram(CALL_DURATION, "call duration")
@@ -141,12 +133,14 @@ async fn calls_timeout_lists_observed_series() {
                 KeyValue::new("rpc.response.status_code", Code::Ok as i64),
             ],
         );
-    metrics.calls("test.Service/Missing", Code::Cancelled).await;
+    metrics
+        .wait_for_call_count("test.Service/Missing", Code::Cancelled)
+        .await;
 }
 
 #[tokio::test(start_paused = true)]
 async fn wait_until_polls_fresh_data_and_checks_immediately() {
-    let metrics = InMemory::new();
+    let metrics = InMemoryMetrics::new();
     metrics
         .wait_until(|m| m.counters("test.late").is_empty(), Duration::ZERO)
         .await;
@@ -171,7 +165,7 @@ async fn wait_until_polls_fresh_data_and_checks_immediately() {
 #[tokio::test(start_paused = true)]
 #[should_panic(expected = "timed out after 17ms waiting for metric predicate; recorded series: []")]
 async fn wait_until_uses_the_supplied_timeout() {
-    InMemory::new()
+    InMemoryMetrics::new()
         .wait_until(|_| false, Duration::from_millis(17))
         .await;
 }

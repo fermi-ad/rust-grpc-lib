@@ -1,10 +1,4 @@
-//! Tests for [`super::qualify_tonic_paths`] and
-//! [`super::rewrite_generated_files`].
-//!
-//! Covers: each tonic-build path shape that must be rewritten, every shape that
-//! must be left alone (identifier boundaries, qualified paths, comments),
-//! server wire method metadata, idempotence, and file-level behavior (line
-//! endings, missing files, untouched neighbors).
+//! Tests for [`super::qualify_tonic_paths`] and [`super::rewrite_generated_files`].
 
 use std::{env, fs, path::PathBuf, process};
 
@@ -15,10 +9,6 @@ const QUALIFIED: &str = "::rust_grpc_lib::__private::tonic::";
 fn rewrite(line: &str) -> String {
     qualify_tonic_paths(line).into_owned()
 }
-
-// -----------------------------------------------------------------------
-// qualify_tonic_paths: rewritten
-// -----------------------------------------------------------------------
 
 #[test]
 fn rewrites_a_path_at_the_start_of_a_line() {
@@ -96,10 +86,6 @@ fn keeps_the_line_ending() {
     assert_eq!(rewrite("tonic::A\n"), format!("{QUALIFIED}A\n"));
     assert_eq!(rewrite("tonic::A\r\n"), format!("{QUALIFIED}A\r\n"));
 }
-
-// -----------------------------------------------------------------------
-// qualify_tonic_paths: left alone
-// -----------------------------------------------------------------------
 
 #[test]
 fn leaves_tonic_prost_alone() {
@@ -182,10 +168,6 @@ fn returns_a_borrowed_line_when_nothing_changes() {
     assert!(matches!(qualify_tonic_paths("tonic::X"), Cow::Owned(_)));
 }
 
-// -----------------------------------------------------------------------
-// qualify_tonic_paths: mixed lines and idempotence
-// -----------------------------------------------------------------------
-
 #[test]
 fn rewrites_only_the_paths_on_a_mixed_line() {
     assert_eq!(
@@ -211,10 +193,6 @@ fn is_idempotent() {
         assert_eq!(rewrite(&once), once, "not idempotent for {line:?}");
     }
 }
-
-// -----------------------------------------------------------------------
-// rewrite_generated_files
-// -----------------------------------------------------------------------
 
 // A scratch directory unique to one test.
 struct Scratch(PathBuf);
@@ -272,7 +250,6 @@ fn rewrites_the_files_of_the_given_packages() {
             "use {QUALIFIED}codegen::*;\n// tonic::Doc\nlet c = tonic_prost::ProstCodec::default();\n"
         )
     );
-    // CRLF endings and a missing final newline survive.
     assert_eq!(
         dir.read("services.example.rs"),
         format!("x: {QUALIFIED}Status\r\ny: {QUALIFIED}Code")

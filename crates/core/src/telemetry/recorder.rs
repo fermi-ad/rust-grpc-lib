@@ -1,7 +1,6 @@
 //! Built-in server call metrics and completion observer.
 
 use std::{
-    collections::HashMap,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
 };
@@ -13,109 +12,71 @@ use opentelemetry::{
 use tokio::sync::watch;
 use tonic::Code;
 
-use super::{CallSummary, LOG_TARGET, Telemetry, call::Sink, label::LabelIndex, layer::CallLayer};
+use super::{CallSummary, LOG_TARGET, Telemetry};
 
 #[cfg(test)]
 mod tests;
 
-/// Runs once at call completion, on the serving path. Keep it cheap and
-/// non-blocking. Panics are caught and logged after the metrics are recorded.
-pub(crate) type OnCall = Arc<dyn Fn(&CallSummary) + Send + Sync>;
+pub(crate) type CallCompletionObserver = Arc<dyn Fn(&CallSummary) + Send + Sync>;
 
-#[derive(Clone)]
-pub(crate) struct Recorder {
-    inner: Arc<RecorderInner>,
+pub(crate) struct CallRecorder {
+    call_duration: Histogram<f64>,
+    in_flight_calls: UpDownCounter<i64>,
+    on_call: Option<CallCompletionObserver>,
+    // Keep the shutdown barrier open until the last call guard records its outcome.
+    _call_drain_guard: watch::Receiver<()>,
 }
 
-struct RecorderInner {
-    duration: Histogram<f64>,
-    active: UpDownCounter<i64>,
-    methods: HashMap<&'static str, [KeyValue; 2]>,
-    other: [KeyValue; 2],
-    on_call: Option<OnCall>,
-    // Shared by the layer, each service and all call completion guards.
-    // Dropped only after the last guard records its outcome.
-    _serving: watch::Receiver<()>,
-}
-
-impl CallLayer<Recorder> {
-    pub(crate) fn recording(
+impl CallRecorder {
+    pub(crate) fn new(
         telemetry: &Telemetry,
-        labels: LabelIndex,
-        on_call: Option<OnCall>,
-        serving: watch::Receiver<()>,
-    ) -> Self {
-        let recorder = Recorder::new(telemetry, &labels, on_call, serving);
-        Self::new(labels, recorder)
-    }
-}
-
-impl Recorder {
-    fn new(
-        telemetry: &Telemetry,
-        labels: &LabelIndex,
-        on_call: Option<OnCall>,
-        serving: watch::Receiver<()>,
+        on_call: Option<CallCompletionObserver>,
+        call_drain_guard: watch::Receiver<()>,
     ) -> Self {
         Self {
-            inner: Arc::new(RecorderInner {
-                duration: telemetry.duration_histogram(
-                    "rpc.server.call.duration",
-                    "Duration of incoming gRPC calls",
-                ),
-                active: telemetry
-                    .meter()
-                    .i64_up_down_counter("rpc.server.active_requests")
-                    .with_description("Number of in-flight gRPC calls")
-                    .with_unit("{request}")
-                    .build(),
-                methods: labels
-                    .methods()
-                    .map(|label| (label, method_attributes(label)))
-                    .collect(),
-                other: method_attributes("_OTHER"),
-                on_call,
-                _serving: serving,
-            }),
+            call_duration: telemetry.duration_histogram(
+                "rpc.server.call.duration",
+                "Duration of incoming gRPC calls",
+            ),
+            in_flight_calls: telemetry
+                .meter()
+                .i64_up_down_counter("rpc.server.active_requests")
+                .with_description("Number of in-flight gRPC calls")
+                .with_unit("{request}")
+                .build(),
+            on_call,
+            _call_drain_guard: call_drain_guard,
         }
     }
 
-    fn method_attributes(&self, method: Option<&'static str>) -> &[KeyValue; 2] {
-        method
-            .and_then(|label| self.inner.methods.get(label))
-            .unwrap_or(&self.inner.other)
-    }
-}
-
-impl Sink for Recorder {
-    fn started(&self, method: Option<&'static str>) {
-        self.inner.active.add(1, self.method_attributes(method));
+    pub(super) fn started(&self, method: Option<&'static str>) {
+        self.in_flight_calls.add(1, &method_attributes(method));
     }
 
-    fn finished(&self, summary: CallSummary) {
-        let method = self.method_attributes(summary.method);
-        self.inner.active.add(-1, method);
+    pub(super) fn finished(&self, summary: CallSummary) {
+        let attributes = method_attributes(summary.method);
+        self.in_flight_calls.add(-1, &attributes);
 
-        let [system, method] = method.clone();
+        let [system, method] = attributes;
+        // This metric uses numeric gRPC status codes and tonic error names,
+        // not the OpenTelemetry v1.37 string conventions.
         let status = KeyValue::new("rpc.response.status_code", summary.status as i64);
-        let seconds = summary.duration.as_secs_f64();
-        if let Some(name) = error_name(summary.status) {
-            self.inner.duration.record(
-                seconds,
-                &[system, method, status, KeyValue::new("error.type", name)],
-            );
+        let duration_seconds = summary.duration.as_secs_f64();
+        if summary.status == Code::Ok {
+            self.call_duration
+                .record(duration_seconds, &[system, method, status]);
         } else {
-            self.inner
-                .duration
-                .record(seconds, &[system, method, status]);
+            let error = KeyValue::new("error.type", format!("{:?}", summary.status));
+            self.call_duration
+                .record(duration_seconds, &[system, method, status, error]);
         }
 
-        if let Some(on_call) = &self.inner.on_call
+        if let Some(on_call) = &self.on_call
             && let Err(payload) = catch_unwind(AssertUnwindSafe(|| on_call(&summary)))
         {
             tracing::error!(target: LOG_TARGET, "gRPC call observer panicked");
-            // Even dropping a custom panic payload can panic. Don't let it
-            // unwind through the response path (or a cancellation guard).
+            // A custom panic payload can panic on drop; leak a second payload
+            // rather than risking another unwind during call completion.
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
                 std::mem::forget(payload);
             }
@@ -123,31 +84,9 @@ impl Sink for Recorder {
     }
 }
 
-fn method_attributes(label: &'static str) -> [KeyValue; 2] {
+fn method_attributes(method: Option<&'static str>) -> [KeyValue; 2] {
     [
         KeyValue::new("rpc.system.name", "grpc"),
-        KeyValue::new("rpc.method", label),
+        KeyValue::new("rpc.method", method.unwrap_or("_OTHER")),
     ]
-}
-
-fn error_name(code: Code) -> Option<&'static str> {
-    Some(match code {
-        Code::Ok => return None,
-        Code::Cancelled => "Cancelled",
-        Code::Unknown => "Unknown",
-        Code::InvalidArgument => "InvalidArgument",
-        Code::DeadlineExceeded => "DeadlineExceeded",
-        Code::NotFound => "NotFound",
-        Code::AlreadyExists => "AlreadyExists",
-        Code::PermissionDenied => "PermissionDenied",
-        Code::ResourceExhausted => "ResourceExhausted",
-        Code::FailedPrecondition => "FailedPrecondition",
-        Code::Aborted => "Aborted",
-        Code::OutOfRange => "OutOfRange",
-        Code::Unimplemented => "Unimplemented",
-        Code::Internal => "Internal",
-        Code::Unavailable => "Unavailable",
-        Code::DataLoss => "DataLoss",
-        Code::Unauthenticated => "Unauthenticated",
-    })
 }

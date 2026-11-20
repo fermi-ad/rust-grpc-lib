@@ -1,13 +1,19 @@
 //! Per-call state and the shared terminal notification.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use tonic::Code;
+
+use super::recorder::CallRecorder;
 
 #[cfg(test)]
 mod tests;
 
-/// The outcome of one finished gRPC call.
+/// What [`GrpcServerBuilder::on_call_complete`](crate::server::GrpcServerBuilder::on_call_complete)
+/// observers receive for each finished call.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct CallSummary {
@@ -15,62 +21,52 @@ pub struct CallSummary {
     pub method: Option<&'static str>,
     /// The final gRPC status, or the status inferred from termination.
     pub status: Code,
-    /// Time from request receipt to final status or drop.
+    /// From request receipt to final status or drop.
     pub duration: Duration,
-}
-
-pub(crate) trait Sink: Clone {
-    fn started(&self, method: Option<&'static str>);
-    fn finished(&self, summary: CallSummary);
 }
 
 /// The response future owns this until it can hand it to the response body.
 /// Whichever path consumes the state first owns the terminal notification.
-pub(super) struct CompletionGuard<T: Sink> {
-    state: Option<State<T>>,
-}
-
-struct State<T> {
-    sink: T,
+pub(super) struct CompletionGuard {
+    recorder: Option<Arc<CallRecorder>>,
     method: Option<&'static str>,
     start: Instant,
 }
 
-impl<T: Sink> CompletionGuard<T> {
-    pub(super) fn new(sink: T, method: Option<&'static str>, start: Instant) -> Self {
-        sink.started(method);
+impl CompletionGuard {
+    pub(super) fn new(
+        recorder: Arc<CallRecorder>,
+        method: Option<&'static str>,
+        start: Instant,
+    ) -> Self {
+        recorder.started(method);
         Self {
-            state: Some(State {
-                sink,
-                method,
-                start,
-            }),
+            recorder: Some(recorder),
+            method,
+            start,
         }
     }
 
-    pub(super) fn transfer(&mut self) -> Self {
+    pub(super) fn take_completion(&mut self) -> Self {
         Self {
-            state: self.state.take(),
+            recorder: self.recorder.take(),
+            method: self.method,
+            start: self.start,
         }
     }
 
     pub(super) fn finish(&mut self, status: Code) {
-        if let Some(State {
-            sink,
-            method,
-            start,
-        }) = self.state.take()
-        {
-            sink.finished(CallSummary {
-                method,
+        if let Some(recorder) = self.recorder.take() {
+            recorder.finished(CallSummary {
+                method: self.method,
                 status,
-                duration: start.elapsed(),
+                duration: self.start.elapsed(),
             });
         }
     }
 }
 
-impl<T: Sink> Drop for CompletionGuard<T> {
+impl Drop for CompletionGuard {
     fn drop(&mut self) {
         self.finish(Code::Cancelled);
     }

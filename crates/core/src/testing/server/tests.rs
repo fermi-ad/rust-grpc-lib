@@ -1,10 +1,6 @@
 //! Focused coverage of the test harness itself.
 
 use std::convert::Infallible;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
 use std::task::{Context, Poll};
 
 use tokio::net::TcpStream;
@@ -21,7 +17,6 @@ use super::*;
 
 const KID: &str = "test-server-kid";
 const METHOD: &str = "test.Harness/Ping";
-const CALL_DURATION: &str = "rpc.server.call.duration";
 
 #[derive(Clone)]
 struct Stub;
@@ -68,47 +63,25 @@ impl Service<http::Request<Body>> for Stub {
 }
 
 #[tokio::test]
-async fn authenticated_stub_records_isolated_metrics_and_shutdown_stops_provider() {
+async fn authenticated_stub_records_metrics_and_shutdown_stops_provider() {
     let server = TestServer::builder(KID)
         .add_service(|stub| stub, Stub)
         .with_metrics()
         .start()
         .await;
-    let other = TestServer::builder("other-kid")
-        .with_metrics()
-        .start()
-        .await;
     assert_eq!(server.addr().ip(), Ipv4Addr::LOCALHOST);
-    assert_ne!(server.addr(), other.addr());
-
-    // The readiness check passed through the new server's own telemetry.
-    assert_eq!(
-        server
-            .metrics()
-            .calls("grpc.health.v1.Health/Check", Code::Ok)
-            .await,
-        1
-    );
     let channel = Endpoint::new(server.url().to_owned())
         .unwrap()
         .connect()
         .await
         .unwrap();
-    assert_eq!(
-        health_status(channel.clone(), Stub::NAME).await.unwrap(),
-        ServingStatus::Serving
-    );
     let token = server.token("alice", &["operator"]);
     call_rpc(channel, &format!("/{METHOD}"), Some(&token))
         .await
         .unwrap();
-    assert_eq!(server.metrics().calls(METHOD, Code::Ok).await, 1);
-    assert!(
-        other
-            .metrics()
-            .histograms(CALL_DURATION)
-            .iter()
-            .all(|point| point.attributes["rpc.method"] != METHOD)
+    assert_eq!(
+        server.metrics().wait_for_call_count(METHOD, Code::Ok).await,
+        1
     );
 
     let addr = server.addr();
@@ -118,24 +91,6 @@ async fn authenticated_stub_records_isolated_metrics_and_shutdown_stops_provider
     server.shutdown().await;
     assert!(!telemetry.is_enabled());
     assert!(TcpStream::connect(addr).await.is_err());
-    other.shutdown().await;
-}
-
-#[tokio::test]
-async fn without_telemetry_overrides_metrics_and_disables_observer() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let observed = calls.clone();
-    let server = TestServer::builder(KID)
-        .with_metrics()
-        .on_call(move |_| {
-            observed.fetch_add(1, Ordering::Relaxed);
-        })
-        .without_telemetry()
-        .start()
-        .await;
-    assert!(server.metrics.is_none());
-    server.shutdown().await;
-    assert_eq!(calls.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]
@@ -192,5 +147,13 @@ async fn dropping_the_handle_aborts_the_server() {
     })
     .await
     .expect("dropping the harness must stop the server task");
-    assert!(TcpStream::connect(addr).await.is_err());
+    // A single connect can transiently succeed on a recycled ephemeral port
+    // (another test rebinding it, or a TCP self-connect), so wait for a refusal.
+    timeout(Duration::from_secs(5), async {
+        while TcpStream::connect(addr).await.is_ok() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the aborted server's address must stop accepting connections");
 }

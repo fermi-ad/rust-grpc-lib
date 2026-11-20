@@ -3,28 +3,15 @@
 use std::future::Future;
 use std::io;
 
-/// Waits for SIGTERM or SIGINT on Unix, or Ctrl-C on Windows, and logs which
-/// signal arrived. Registration happens when the future is first polled.
+/// Waits for SIGTERM or SIGINT on Unix, or Ctrl-C on Windows. Registration
+/// happens when the future is first polled.
 ///
 /// On Unix, Tokio's handlers replace the default behavior for these signals
 /// for the rest of the process, even after this future completes or is dropped.
 ///
-/// # Errors
-///
-/// Returns the underlying I/O error if a handler cannot be registered.
-///
 /// # Panics
 ///
 /// On Unix, requires a Tokio runtime with I/O enabled (`enable_all()` suffices).
-///
-/// # Example
-///
-/// ```no_run
-/// # async fn run() -> std::io::Result<()> {
-/// rust_grpc_lib::server::shutdown_signal().await?;
-/// # Ok(())
-/// # }
-/// ```
 pub async fn shutdown_signal() -> io::Result<()> {
     register()?.await;
     Ok(())

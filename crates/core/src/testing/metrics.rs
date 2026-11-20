@@ -11,7 +11,7 @@ use opentelemetry_sdk::{
     error::OTelSdkResult,
     metrics::{
         InstrumentKind, ManualReader, Pipeline, Temporality,
-        data::{AggregatedMetrics, Histogram, MetricData, ResourceMetrics, Sum},
+        data::{AggregatedMetrics, Histogram, Metric, MetricData, ResourceMetrics, Sum},
         reader::MetricReader,
     },
 };
@@ -26,17 +26,14 @@ const CALL_DURATION: &str = "rpc.server.call.duration";
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-/// An isolated SDK metrics pipeline with no network exporter or global state.
-///
-/// Reads collect cumulative data on demand, with no background collection
-/// interval. Shutting down the telemetry retains its final collection for
-/// inspection. The runtime scheduling probe is disabled for this pipeline.
+/// Reads collect cumulative data on demand, and shutting down the telemetry
+/// retains its final collection. The runtime scheduling probe is disabled.
 ///
 /// ```
-/// use rust_grpc_lib::testing::InMemory;
+/// use rust_grpc_lib::testing::InMemoryMetrics;
 /// use rust_grpc_lib::telemetry::opentelemetry::KeyValue;
 ///
-/// let metrics = InMemory::new();
+/// let metrics = InMemoryMetrics::new();
 /// let counter = metrics.telemetry().meter().u64_counter("jobs.completed").build();
 /// counter.add(2, &[KeyValue::new("queue", "default")]);
 ///
@@ -44,29 +41,27 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// assert_eq!(points[0].value, 2.0);
 /// assert_eq!(points[0].attributes["queue"], "default");
 /// ```
-pub struct InMemory {
+pub struct InMemoryMetrics {
     telemetry: Telemetry,
     reader: SnapshotReader,
 }
 
-/// An explicit-bucket histogram point for one attribute set.
-/// Integer measurements are converted to `f64` for the sum and extrema.
+/// One explicit-bucket histogram point, from [`InMemoryMetrics::histograms`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistogramSnapshot {
+    /// The instrument's unit, such as `s`.
     pub unit: String,
     /// Point attributes with values rendered as strings.
     pub attributes: BTreeMap<String, String>,
+    /// Number of recorded measurements.
     pub count: u64,
-    pub sum: f64,
-    pub min: Option<f64>,
-    pub max: Option<f64>,
     /// The inclusive upper bounds of the finite buckets.
     pub bounds: Vec<f64>,
     /// Counts for each bound, followed by the count above the last bound.
     pub bucket_counts: Vec<u64>,
 }
 
-/// A counter or up-down counter point for one attribute set.
+/// One counter or up-down counter point, from [`InMemoryMetrics::counters`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct CounterSnapshot {
     /// Point attributes with values rendered as strings.
@@ -75,14 +70,14 @@ pub struct CounterSnapshot {
     pub value: f64,
 }
 
-impl InMemory {
-    /// Start a fresh pipeline without reading exporter settings or requiring a runtime.
+impl InMemoryMetrics {
+    /// Reads no exporter settings and needs no runtime.
     #[must_use = "keep the in-memory pipeline to inspect its metrics"]
     pub fn new() -> Self {
         let reader = SnapshotReader::default();
         let telemetry = Telemetry::from_reader(
             reader.clone(),
-            TelemetryConfig::default().runtime_probe(false),
+            TelemetryConfig::default().runtime_scheduling_probe(false),
         );
         assert!(
             telemetry.is_enabled(),
@@ -91,31 +86,28 @@ impl InMemory {
         Self { telemetry, reader }
     }
 
-    /// Clone the telemetry handle for writing into this pipeline.
+    /// Record into this pipeline, or pass it to the server as caller-owned telemetry.
     #[must_use = "use the handle to record metrics or supply it to the server"]
     pub fn telemetry(&self) -> Telemetry {
         self.telemetry.clone()
     }
 
-    /// Collect explicit-bucket histogram points with this instrument name.
+    /// Points for the instrument `name`, sorted by attributes.
     #[must_use = "inspect the returned histogram points"]
     pub fn histograms(&self, name: &str) -> Vec<HistogramSnapshot> {
-        self.reader.with_metrics(|export| {
+        self.reader.with_metrics(|snapshot| {
             let mut points = Vec::new();
-            for metric in export.scope_metrics().flat_map(|scope| scope.metrics()) {
-                if metric.name() != name {
-                    continue;
-                }
+            for metric in iter_metrics(snapshot).filter(|metric| metric.name() == name) {
                 let unit = metric.unit();
                 match metric.data() {
                     AggregatedMetrics::F64(MetricData::Histogram(data)) => {
-                        points.extend(histogram_points(data, unit, |n| n));
+                        points.extend(histogram_points(data, unit));
                     }
                     AggregatedMetrics::U64(MetricData::Histogram(data)) => {
-                        points.extend(histogram_points(data, unit, |n| n as f64));
+                        points.extend(histogram_points(data, unit));
                     }
                     AggregatedMetrics::I64(MetricData::Histogram(data)) => {
-                        points.extend(histogram_points(data, unit, |n| n as f64));
+                        points.extend(histogram_points(data, unit));
                     }
                     _ => {}
                 }
@@ -125,15 +117,12 @@ impl InMemory {
         })
     }
 
-    /// Collect counter and up-down counter points with this instrument name.
+    /// Includes up-down counters.
     #[must_use = "inspect the returned counter points"]
     pub fn counters(&self, name: &str) -> Vec<CounterSnapshot> {
-        self.reader.with_metrics(|export| {
+        self.reader.with_metrics(|snapshot| {
             let mut points = Vec::new();
-            for metric in export.scope_metrics().flat_map(|scope| scope.metrics()) {
-                if metric.name() != name {
-                    continue;
-                }
+            for metric in iter_metrics(snapshot).filter(|metric| metric.name() == name) {
                 match metric.data() {
                     AggregatedMetrics::F64(MetricData::Sum(data)) => {
                         points.extend(counter_points(data, |n| n));
@@ -156,10 +145,9 @@ impl InMemory {
         })
     }
 
-    /// Wait for at least one completed call and return the current cumulative count.
-    /// Use the canonical `package.Service/Method` (without a leading slash), or
+    /// `method` is the canonical `package.Service/Method` (no leading slash), or
     /// `_OTHER` for unlisted paths. Panics after five seconds if no call matches.
-    pub async fn calls(&self, method: &str, code: Code) -> u64 {
+    pub async fn wait_for_call_count(&self, method: &str, code: Code) -> u64 {
         let status = (code as i64).to_string();
         self.poll(
             CALL_TIMEOUT,
@@ -183,9 +171,8 @@ impl InMemory {
         .await
     }
 
-    /// Poll a predicate until it succeeds. The predicate is checked immediately
-    /// and can use the snapshot methods to check the latest measurements.
-    /// Panics with the recorded series if the timeout expires.
+    /// Checks `f` immediately, then polls. Panics with the recorded series if
+    /// the timeout expires.
     pub async fn wait_until(&self, f: impl Fn(&Self) -> bool, timeout: Duration) {
         self.poll(timeout, "metric predicate", || f(self).then_some(()))
             .await;
@@ -203,20 +190,18 @@ impl InMemory {
             }
             tokio::time::sleep_until((now + POLL_INTERVAL).min(deadline)).await;
         }
-        let series = self.reader.with_metrics(|export| {
-            let mut names: Vec<_> = export
-                .scope_metrics()
-                .flat_map(|scope| scope.metrics())
+        let series = self.reader.with_metrics(|snapshot| {
+            let mut descriptions: Vec<_> = iter_metrics(snapshot)
                 .map(|metric| format!("{}: {:?}", metric.name(), metric.data()))
                 .collect();
-            names.sort();
-            names
+            descriptions.sort();
+            descriptions
         });
         panic!("timed out after {timeout:?} waiting for {what}; recorded series: {series:?}");
     }
 }
 
-impl Default for InMemory {
+impl Default for InMemoryMetrics {
     fn default() -> Self {
         Self::new()
     }
@@ -280,18 +265,18 @@ impl MetricReader for SnapshotReader {
     }
 }
 
+fn iter_metrics(snapshot: &ResourceMetrics) -> impl Iterator<Item = &Metric> {
+    snapshot.scope_metrics().flat_map(|scope| scope.metrics())
+}
+
 fn histogram_points<'a, T: Copy + 'a>(
     data: &'a Histogram<T>,
     unit: &'a str,
-    number: impl Fn(T) -> f64 + 'a,
 ) -> impl Iterator<Item = HistogramSnapshot> + 'a {
     data.data_points().map(move |point| HistogramSnapshot {
         unit: unit.to_owned(),
         attributes: attributes(point.attributes()),
         count: point.count(),
-        sum: number(point.sum()),
-        min: point.min().map(&number),
-        max: point.max().map(&number),
         bounds: point.bounds().collect(),
         bucket_counts: point.bucket_counts().collect(),
     })
@@ -299,11 +284,11 @@ fn histogram_points<'a, T: Copy + 'a>(
 
 fn counter_points<T: Copy>(
     data: &Sum<T>,
-    number: impl Fn(T) -> f64,
+    to_f64: impl Fn(T) -> f64,
 ) -> impl Iterator<Item = CounterSnapshot> {
     data.data_points().map(move |point| CounterSnapshot {
         attributes: attributes(point.attributes()),
-        value: number(point.value()),
+        value: to_f64(point.value()),
     })
 }
 

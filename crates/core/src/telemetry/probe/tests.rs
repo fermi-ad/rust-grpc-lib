@@ -13,14 +13,15 @@ const BOUNDS: [f64; 2] = [0.005, 0.025];
 
 #[tokio::test(start_paused = true)]
 async fn probe_keeps_absolute_cadence_and_skips_missed_ticks() {
-    let (telemetry, reader) = in_memory(TelemetryConfig::default().duration_buckets(BOUNDS));
-    let _probe = telemetry.start_runtime_probe().unwrap();
+    let (telemetry, reader) =
+        in_memory(TelemetryConfig::default().duration_bucket_bounds_seconds(BOUNDS));
+    let _probe = telemetry.attach_runtime_probe().unwrap();
     yield_now().await;
     assert!(point(&reader).is_none());
 
     // Wake slightly late, then near the original second deadline. The first
     // delay must not shift the deadline for the next sample.
-    elapse(PERIOD + Duration::from_millis(4)).await;
+    elapse(SAMPLE_PERIOD + Duration::from_millis(4)).await;
     assert_eq!(point(&reader).unwrap().count(), 1);
     elapse(Duration::from_millis(7)).await;
     assert_eq!(point(&reader).unwrap().count(), 2);
@@ -34,7 +35,7 @@ async fn probe_keeps_absolute_cadence_and_skips_missed_ticks() {
     assert_eq!(delayed.bucket_counts().collect::<Vec<_>>(), [2, 0, 1]);
     assert_eq!(delayed.attributes().count(), 0);
 
-    elapse(PERIOD - Duration::from_millis(1)).await;
+    elapse(SAMPLE_PERIOD - Duration::from_millis(1)).await;
     assert_eq!(point(&reader).unwrap().count(), 3);
     elapse(Duration::from_millis(2)).await;
     assert_eq!(point(&reader).unwrap().count(), 4);
@@ -43,8 +44,8 @@ async fn probe_keeps_absolute_cadence_and_skips_missed_ticks() {
 #[tokio::test]
 async fn probe_samples_on_a_live_runtime() {
     let (telemetry, reader) = in_memory(TelemetryConfig::default());
-    let _probe = telemetry.start_runtime_probe().unwrap();
-    tokio::time::sleep(8 * PERIOD).await;
+    let _probe = telemetry.attach_runtime_probe().unwrap();
+    tokio::time::sleep(8 * SAMPLE_PERIOD).await;
     yield_now().await;
     let count = point(&reader).map_or(0, |point| point.count());
     assert!(
@@ -59,8 +60,8 @@ async fn probe_records_a_blocked_runtime() {
     // Block the only worker for five periods, starting before the first
     // sample. At most one period elapses before the first deadline.
     let _probe = tokio::spawn(async move {
-        let probe = telemetry.start_runtime_probe().unwrap();
-        std::thread::sleep(5 * PERIOD);
+        let probe = telemetry.attach_runtime_probe().unwrap();
+        std::thread::sleep(5 * SAMPLE_PERIOD);
         probe
     })
     .await
@@ -69,11 +70,11 @@ async fn probe_records_a_blocked_runtime() {
         loop {
             if point(&reader)
                 .and_then(|point| point.max())
-                .is_some_and(|delay| delay >= (4 * PERIOD).as_secs_f64())
+                .is_some_and(|delay| delay >= (4 * SAMPLE_PERIOD).as_secs_f64())
             {
                 break;
             }
-            tokio::time::sleep(PERIOD).await;
+            tokio::time::sleep(SAMPLE_PERIOD).await;
         }
     })
     .await
@@ -83,7 +84,6 @@ async fn probe_records_a_blocked_runtime() {
 #[test]
 fn probe_opt_outs_do_not_spawn_even_without_a_tokio_runtime() {
     for telemetry in [
-        Telemetry::disabled(),
         Telemetry::start(TelemetryConfig::default()),
         Telemetry::start(
             TelemetryConfig::default()
@@ -93,26 +93,26 @@ fn probe_opt_outs_do_not_spawn_even_without_a_tokio_runtime() {
         Telemetry::start(TelemetryConfig::default().endpoint("invalid")),
     ] {
         assert!(!telemetry.is_enabled());
-        assert!(telemetry.start_runtime_probe().is_none());
+        assert!(telemetry.attach_runtime_probe().is_none());
     }
 
     for config in [
-        TelemetryConfig::default().runtime_probe(false),
+        TelemetryConfig::default().runtime_scheduling_probe(false),
         TelemetryConfig::from_lookup(|key| (key == "GRPC_RUNTIME_PROBE").then(|| "false".into())),
     ] {
         let (telemetry, _) = in_memory(config);
         assert!(telemetry.is_enabled());
-        assert!(telemetry.start_runtime_probe().is_none());
+        assert!(telemetry.attach_runtime_probe().is_none());
     }
 }
 
 #[tokio::test(start_paused = true)]
 async fn probe_stops_before_provider_shutdown_even_with_an_active_server() {
     let (telemetry, reader) = in_memory(TelemetryConfig::default());
-    let serving = telemetry.start_runtime_probe().unwrap();
+    let probe_guard = telemetry.attach_runtime_probe().unwrap();
     let stop = stop_receiver(&telemetry);
     yield_now().await;
-    elapse(PERIOD + Duration::from_millis(1)).await;
+    elapse(SAMPLE_PERIOD + Duration::from_millis(1)).await;
     assert_eq!(point(&reader).unwrap().count(), 1);
 
     // Drive shutdown up to its first await. The stop flag must already be
@@ -127,8 +127,8 @@ async fn probe_stops_before_provider_shutdown_even_with_an_active_server() {
     assert!(*stop.borrow());
     assert!(stop.has_changed().is_err(), "the stop sender was dropped");
     assert!(!telemetry.is_enabled());
-    assert!(telemetry.start_runtime_probe().is_none());
-    drop(serving);
+    assert!(telemetry.attach_runtime_probe().is_none());
+    drop(probe_guard);
     shutdown.await;
 }
 
@@ -141,7 +141,7 @@ fn stop_receiver(telemetry: &Telemetry) -> watch::Receiver<bool> {
         .probe
         .as_ref()
         .unwrap()
-        .stop
+        .stop_tx
         .subscribe()
 }
 

@@ -12,9 +12,9 @@ use tonic::transport::Endpoint;
 use crate::__private::WireMethods;
 use crate::auth::{KeyValidator, ServicePolicy};
 use crate::server::{GrpcServer, GrpcServerBuilder, GrpcService, ServeError};
-use crate::telemetry::{CallSummary, TelemetryConfig};
+use crate::telemetry::TelemetryConfig;
 
-use super::{InMemory, ServingStatus, health_status, test_token, test_validator};
+use super::{InMemoryMetrics, ServingStatus, health_status, test_token, test_validator};
 
 #[cfg(test)]
 mod tests;
@@ -22,13 +22,10 @@ mod tests;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A running gRPC server bound to a fresh IPv4 loopback port.
-///
 /// Only for tests: the validator trusts a publicly known signing key. No
 /// process signal handlers or environment-configured exporters are installed.
 /// Prefer [`Self::shutdown`] to assert graceful shutdown and flush metrics;
-/// dropping the handle instead aborts the server and closes its connections
-/// without waiting, including during unwinding or cancellation.
+/// dropping the handle aborts the server without waiting.
 ///
 /// ```no_run
 /// use rust_grpc_lib::testing::TestServer;
@@ -50,23 +47,23 @@ pub struct TestServer {
     kid: String,
     addr: SocketAddr,
     url: String,
-    metrics: Option<InMemory>,
+    metrics: Option<InMemoryMetrics>,
     shutdown_timeout: Duration,
     shutdown: Option<oneshot::Sender<()>>,
     task: JoinHandle<Result<(), ServeError>>,
 }
 
-/// Configures a [`TestServer`]. Start it with [`Self::start`].
+/// Created by [`TestServer::builder`]; call [`Self::start`] to run it.
 #[must_use = "the builder must be started to run the test server"]
 pub struct TestServerBuilder {
     kid: String,
     builder: GrpcServerBuilder<KeyValidator>,
-    metrics: Option<InMemory>,
+    metrics: Option<InMemoryMetrics>,
     shutdown_timeout: Duration,
 }
 
 impl TestServer {
-    /// Configure a test server that accepts fixture tokens signed with `kid`.
+    /// Accepts tokens minted by [`Self::token`], signed under `kid`.
     pub fn builder(kid: &str) -> TestServerBuilder {
         TestServerBuilder {
             kid: kid.to_owned(),
@@ -77,36 +74,32 @@ impl TestServer {
         }
     }
 
-    /// The bound IPv4 loopback address.
+    /// The IPv4 loopback address the server is bound to.
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
 
-    /// The HTTP endpoint for connecting a gRPC client.
+    /// The `http://` URL to connect a generated client to.
     pub fn url(&self) -> &str {
         &self.url
     }
 
-    /// Mint a bearer token for this server using [`test_token`].
+    /// A bearer token for `sub` holding the given realm roles.
     #[must_use = "the token is returned, not sent anywhere"]
     pub fn token(&self, sub: &str, roles: &[&str]) -> String {
         test_token(&self.kid, sub, roles)
     }
 
-    /// The server's isolated metric snapshots and polling helpers.
-    ///
     /// # Panics
     ///
-    /// If [`TestServerBuilder::with_metrics`] was not selected, or was
-    /// overridden by [`TestServerBuilder::without_telemetry`].
-    pub fn metrics(&self) -> &InMemory {
+    /// If [`TestServerBuilder::with_metrics`] was not selected.
+    pub fn metrics(&self) -> &InMemoryMetrics {
         self.metrics
             .as_ref()
             .expect("TestServer metrics require .with_metrics()")
     }
 
-    /// Signal shutdown, wait for a graceful drain, then flush and stop the
-    /// in-memory provider, if any. The flush has its own telemetry deadline.
+    /// Drains gracefully, then flushes the in-memory provider, if any.
     ///
     /// # Panics
     ///
@@ -115,14 +108,9 @@ impl TestServer {
     /// awaiting shutdown unless they finish on their own.
     pub async fn shutdown(mut self) {
         let deadline = Instant::now() + self.shutdown_timeout;
-        // Arm the harness deadline before signaling: the server starts its
-        // own (same-length) grace period later, after changing health. If
-        // both are ready when polled, expiry must win over a forced close.
-        let _ = self
-            .shutdown
-            .take()
-            .expect("TestServer shutdown sender")
-            .send(());
+        // Start the harness deadline first and let it win ties, so a forced
+        // close cannot pass as a graceful drain.
+        let _ = self.shutdown.take().unwrap().send(());
         let result = tokio::select! {
             biased;
             () = sleep_until(deadline) => {
@@ -154,8 +142,8 @@ impl Drop for TestServer {
 }
 
 impl TestServerBuilder {
-    /// Register a service with its generated constructor, as on
-    /// [`GrpcServerBuilder::add_service`].
+    /// Like [`GrpcServerBuilder::add_service`]: pass the generated constructor
+    /// and your implementation, e.g. `.add_service(FooServer::new, MyFoo)`.
     pub fn add_service<T, S>(mut self, constructor: impl FnOnce(T) -> S, implementation: T) -> Self
     where
         T: ServicePolicy<S>,
@@ -165,43 +153,30 @@ impl TestServerBuilder {
         self
     }
 
-    /// Collect metrics in an isolated [`InMemory`] backend, regardless of
-    /// environment settings. The last telemetry selection wins.
+    /// Uses an isolated [`InMemoryMetrics`] backend regardless of environment settings.
     pub fn with_metrics(mut self) -> Self {
-        let metrics = self.metrics.get_or_insert_with(InMemory::new);
-        self.builder = self.builder.telemetry(&metrics.telemetry());
+        let metrics = InMemoryMetrics::new();
+        self.builder = self
+            .builder
+            .with_caller_owned_telemetry(&metrics.telemetry());
+        self.metrics = Some(metrics);
         self
     }
 
-    /// Disable the telemetry layer, including the call observer, and discard
-    /// any in-memory backend. The last telemetry selection wins.
-    pub fn without_telemetry(mut self) -> Self {
-        self.builder = self.builder.without_telemetry();
-        self.metrics = None;
-        self
-    }
-
-    /// Limit time to produce an RPC response, as on [`GrpcServerBuilder::timeout`].
+    /// Like [`GrpcServerBuilder::timeout`].
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.builder = self.builder.timeout(timeout);
         self
     }
 
-    /// Observe completed calls, as on [`GrpcServerBuilder::on_call`]. The
-    /// startup health check is also observable unless telemetry is disabled.
-    pub fn on_call(mut self, f: impl Fn(&CallSummary) + Send + Sync + 'static) -> Self {
-        self.builder = self.builder.on_call(f);
-        self
-    }
-
-    /// Bound the graceful drain (default: five seconds).
+    /// Bounds the graceful drain (default: five seconds).
     pub fn shutdown_timeout(mut self, timeout: Duration) -> Self {
         self.shutdown_timeout = timeout;
         self
     }
 
-    /// Bind a fresh port and wait for the server to report `Serving` before
-    /// returning. The readiness check is recorded if metrics are enabled.
+    /// Returns once the server reports `Serving`; that readiness check is
+    /// recorded if metrics are enabled.
     ///
     /// # Panics
     ///
@@ -217,8 +192,7 @@ impl TestServerBuilder {
         let task = tokio::spawn(builder.serve_on_listener(listener, async {
             let _ = signal.await;
         }));
-        // Install the abort guard before awaiting readiness so even a failed
-        // or cancelled start cannot leave the server running.
+        // Guard the task before awaiting readiness so a canceled start aborts it.
         let mut server = TestServer {
             kid: self.kid,
             addr,

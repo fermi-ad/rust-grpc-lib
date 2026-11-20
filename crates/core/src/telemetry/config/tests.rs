@@ -7,7 +7,9 @@ use std::{
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
-use super::{DEFAULT_DURATION_BUCKETS, Duration, ExportMode, LOG_TARGET, TelemetryConfig};
+use super::{
+    DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS, Duration, LOG_TARGET, TelemetryConfig, valid_buckets,
+};
 
 const BASE_ENDPOINT: &str = "https://collector.example";
 const METRICS_ENDPOINT: &str = "https://collector.example/v1/metrics";
@@ -25,63 +27,83 @@ fn defaults_match_an_empty_environment() {
     let executable = std::env::current_exe().unwrap();
     let file_name = executable.file_name().unwrap().to_string_lossy();
     for config in [TelemetryConfig::default(), config(&[])] {
-        assert_eq!(config.export_mode(), ExportMode::NoOp);
+        assert_eq!(config.export_endpoint(), None);
         assert!(!config.sdk_disabled);
         assert_eq!(config.export_interval, Duration::from_secs(10));
         assert_eq!(config.service_name, format!("unknown_service:{file_name}"));
         assert_eq!(config.service_version, None);
-        assert_eq!(config.duration_buckets, DEFAULT_DURATION_BUCKETS);
-        assert!(!config.runtime_probe_enabled(false));
-        assert!(config.runtime_probe_enabled(true));
+        assert_eq!(
+            config.duration_buckets,
+            DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS
+        );
+        assert!(config.runtime_probe);
     }
 }
 
 #[test]
+fn default_buckets_cover_six_decades_and_common_latency_budgets() {
+    let expected = (-5..=0).flat_map(|power| {
+        ["1", "1.5", "2", "3", "5", "7"]
+            .map(|value| format!("{value}e{power}").parse::<f64>().unwrap())
+    });
+    assert!(
+        DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS
+            .into_iter()
+            .eq(expected)
+    );
+    assert!(valid_buckets(&DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS));
+    assert!(DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS.contains(&0.015));
+    assert!(DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS.contains(&0.050));
+    assert!(valid_buckets(&[0.01]));
+    assert!(!valid_buckets(&[]));
+}
+
+#[test]
 fn endpoints_use_signal_before_base_and_only_empty_is_unset() {
-    for (vars, mode) in [
+    for (vars, endpoint) in [
         (
             &[(BASE_VAR, BASE_ENDPOINT), (SIGNAL_VAR, SIGNAL_ENDPOINT)][..],
-            ExportMode::Otlp(SIGNAL_ENDPOINT),
+            Some(SIGNAL_ENDPOINT),
         ),
         (
             &[(BASE_VAR, BASE_ENDPOINT), (SIGNAL_VAR, "")][..],
-            ExportMode::Otlp(METRICS_ENDPOINT),
+            Some(METRICS_ENDPOINT),
         ),
         (
             &[(BASE_VAR, "https://collector.example/")][..],
-            ExportMode::Otlp(METRICS_ENDPOINT),
+            Some(METRICS_ENDPOINT),
         ),
-        (&[(BASE_VAR, ""), (SIGNAL_VAR, "")][..], ExportMode::NoOp),
+        (&[(BASE_VAR, ""), (SIGNAL_VAR, "")][..], None),
         (
             &[(BASE_VAR, BASE_ENDPOINT), (SIGNAL_VAR, " ")][..],
-            ExportMode::Otlp(" "),
+            Some(" "),
         ),
     ] {
-        assert_eq!(config(vars).export_mode(), mode);
+        assert_eq!(config(vars).export_endpoint(), endpoint);
     }
     assert_eq!(
         config(&[(BASE_VAR, BASE_ENDPOINT)])
             .endpoint("")
-            .export_mode(),
-        ExportMode::NoOp
+            .export_endpoint(),
+        None
     );
 }
 
 #[test]
 fn sdk_disable_takes_precedence_over_endpoint() {
-    assert_eq!(
-        config(&[("OTEL_SDK_DISABLED", "true")]).export_mode(),
-        ExportMode::Disabled
-    );
-    for (value, expected) in [
-        ("TrUe", ExportMode::Disabled),
-        ("false", ExportMode::Otlp(METRICS_ENDPOINT)),
-        ("", ExportMode::Otlp(METRICS_ENDPOINT)),
-        ("1", ExportMode::Otlp(METRICS_ENDPOINT)),
-        (" true ", ExportMode::Otlp(METRICS_ENDPOINT)),
+    assert!(config(&[("OTEL_SDK_DISABLED", "true")]).sdk_disabled);
+    for (value, disabled) in [
+        ("TrUe", true),
+        ("false", false),
+        ("", false),
+        ("1", false),
+        (" true ", false),
     ] {
         let config = config(&[(BASE_VAR, BASE_ENDPOINT), ("OTEL_SDK_DISABLED", value)]);
-        assert_eq!(config.export_mode(), expected);
+        assert_eq!(
+            config.export_endpoint(),
+            (!disabled).then_some(METRICS_ENDPOINT)
+        );
     }
 }
 
@@ -167,23 +189,22 @@ fn explicit_setters_override_the_environment_snapshot() {
         ("GRPC_RUNTIME_PROBE", "FaLsE"),
     ]);
     assert_eq!(config.duration_buckets, [0.01, 0.015, 0.05]);
-    assert!(!config.runtime_probe_enabled(true));
+    assert!(!config.runtime_probe);
     let config = config
         .endpoint(METRICS_ENDPOINT)
         .sdk_disabled(false)
         .export_interval(Duration::from_secs(2))
         .service_name("explicit")
         .service_version("42")
-        .duration_buckets([0.025, 0.1])
-        .runtime_probe(true);
-    assert_eq!(config.export_mode(), ExportMode::Otlp(METRICS_ENDPOINT));
+        .duration_bucket_bounds_seconds([0.025, 0.1])
+        .runtime_scheduling_probe(true);
+    assert_eq!(config.export_endpoint(), Some(METRICS_ENDPOINT));
     assert_eq!(config.export_interval, Duration::from_secs(2));
     assert_eq!(config.service_name, "explicit");
     assert_eq!(config.service_version.as_deref(), Some("42"));
     assert_eq!(config.duration_buckets, [0.025, 0.1]);
-    assert!(config.runtime_probe_enabled(true));
-    assert!(!config.runtime_probe_enabled(false));
-    assert!(!config.runtime_probe(false).runtime_probe_enabled(true));
+    assert!(config.runtime_probe);
+    assert!(!config.runtime_scheduling_probe(false).runtime_probe);
 }
 
 #[test]
@@ -219,20 +240,20 @@ fn invalid_buckets_and_probe_warn_without_echoing_input() {
         ] {
             assert_eq!(
                 config(&[("GRPC_DURATION_BUCKETS", value)]).duration_buckets,
-                DEFAULT_DURATION_BUCKETS
+                DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS
             );
         }
         assert_eq!(
             TelemetryConfig::default()
-                .duration_buckets([0.01])
-                .duration_buckets([0.0])
+                .duration_bucket_bounds_seconds([0.01])
+                .duration_bucket_bounds_seconds([0.0])
                 .duration_buckets,
-            DEFAULT_DURATION_BUCKETS
+            DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS
         );
         for value in ["", "1", "off", " true "] {
-            assert!(config(&[("GRPC_RUNTIME_PROBE", value)]).runtime_probe_enabled(true));
+            assert!(config(&[("GRPC_RUNTIME_PROBE", value)]).runtime_probe);
         }
-        assert!(config(&[("GRPC_RUNTIME_PROBE", "TrUe")]).runtime_probe_enabled(true));
+        assert!(config(&[("GRPC_RUNTIME_PROBE", "TrUe")]).runtime_probe);
     });
     let warnings = warnings.0.lock().unwrap();
     assert_eq!(warnings.len(), 14);

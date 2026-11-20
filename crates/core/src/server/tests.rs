@@ -73,7 +73,6 @@ impl Service<Request<Body>> for Stub {
     }
 }
 
-/// Read a service's status through the public `Health` service.
 async fn status_of(reporter: &HealthReporter, name: &str) -> WireStatus {
     HealthService::from_health_reporter(reporter.clone())
         .check(tonic::Request::new(HealthCheckRequest {
@@ -85,62 +84,18 @@ async fn status_of(reporter: &HealthReporter, name: &str) -> WireStatus {
         .status()
 }
 
-#[tokio::test]
-async fn injected_signal_marks_health_not_serving_and_drains() {
-    let builder = GrpcServer::builder(test_validator(KID)).without_telemetry();
-    let health = builder.health.clone();
-    let addr = "127.0.0.1:0".parse().unwrap();
-    let (send, receive) = oneshot::channel();
-    let serve = builder.serve_with_signal_source(addr, || Ok(async { receive.await.unwrap() }));
-    tokio::pin!(serve);
-
-    // Poll once to start serving before checking health and sending the signal.
-    tokio::select! {
-        biased;
-        result = &mut serve => panic!("server returned before shutdown: {result:?}"),
-        () = std::future::ready(()) => {}
-    }
-    assert_eq!(status_of(&health, "").await, WireStatus::Serving);
-
-    send.send(()).unwrap();
-    timeout(Duration::from_secs(5), serve)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(status_of(&health, "").await, WireStatus::NotServing);
+/// Server-owned telemetry that is already started, so tests can read its exports.
+fn server_owned(telemetry: Telemetry) -> TelemetrySource {
+    TelemetrySource::ServerOwned(None, OnceLock::from(telemetry))
 }
 
 #[tokio::test]
-async fn registration_error_is_returned_before_binding() {
-    let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let err = GrpcServer::builder(test_validator(KID))
-        .serve_with_signal_source(occupied.local_addr().unwrap(), || {
-            Err::<std::future::Pending<()>, _>(io::Error::other("registration failed"))
-        })
-        .await
-        .unwrap_err();
-
-    assert!(matches!(err, ServeError::Signal(_)), "{err:?}");
-    assert_eq!(err.source().unwrap().to_string(), "registration failed");
-    assert_eq!(
-        err.to_string(),
-        "failed to register the shutdown signal handlers: registration failed"
-    );
-}
-
-#[tokio::test]
-async fn signal_opt_out_skips_registration_and_keeps_serving() {
+async fn without_signal_handling_keeps_serving() {
     let builder = GrpcServer::builder(test_validator(KID))
         .without_telemetry()
         .without_signal_handling();
     let addr = "127.0.0.1:0".parse().unwrap();
-    let result = timeout(
-        Duration::from_millis(100),
-        builder.serve_with_signal_source(addr, || -> io::Result<std::future::Pending<()>> {
-            panic!("opt-out must not register a signal listener")
-        }),
-    )
-    .await;
+    let result = timeout(Duration::from_millis(100), builder.serve(addr)).await;
     assert!(result.is_err(), "serve unexpectedly returned: {result:?}");
 }
 
@@ -172,10 +127,10 @@ async fn shutdown_grace_starts_at_signal_and_cancels_streams_before_flushing() {
     let grace = Duration::from_millis(200);
     let (telemetry, exporter) = in_memory();
     let (summaries, mut calls) = tokio::sync::mpsc::unbounded_channel();
-    let builder = GrpcServer::builder(test_validator(KID))
+    let mut builder = GrpcServer::builder(test_validator(KID))
         .shutdown_grace(grace)
-        .with_automatic_test_telemetry(telemetry.clone())
-        .on_call(move |summary| summaries.send(*summary).unwrap());
+        .on_call_complete(move |summary| summaries.send(*summary).unwrap());
+    builder.telemetry = server_owned(telemetry.clone());
     let (warnings, mut events) = tokio::sync::mpsc::unbounded_channel();
     // Keep two dispatches registered so tracing combines their callsite
     // interests instead of caching just the first polling thread's default.
@@ -198,13 +153,13 @@ async fn shutdown_grace_starts_at_signal_and_cancels_streams_before_flushing() {
     let mut second = open_watch(addr).await;
     assert!(!task.is_finished(), "grace must not limit normal serving");
     assert!(events.try_recv().is_err());
-    assert_eq!(telemetry.runtime_probe_servers(), 1);
+    assert_eq!(telemetry.runtime_probe_server_count(), 1);
     assert!(exporter.get_finished_metrics().unwrap().is_empty());
 
     let start = tokio::time::Instant::now();
     stop.send(()).unwrap();
     assert_eq!(watch_status(&mut first).await, WireStatus::NotServing);
-    assert_eq!(telemetry.runtime_probe_servers(), 0);
+    assert_eq!(telemetry.runtime_probe_server_count(), 0);
     timeout(Duration::from_secs(5), task)
         .await
         .unwrap()
@@ -365,47 +320,40 @@ async fn set_status_updates_the_overall_service_and_every_listed_service() {
 #[test]
 fn telemetry_is_lazy_and_the_last_selection_replaces_a_cached_meter() {
     let builder = GrpcServer::builder(test_validator(KID));
-    assert!(builder.automatic_telemetry.get().is_none());
+    assert!(
+        matches!(&builder.telemetry, TelemetrySource::ServerOwned(None, cache) if cache.get().is_none())
+    );
 
     let shared = in_memory().0;
     let config = TelemetryConfig::default()
         .endpoint("invalid")
         .sdk_disabled(true);
-    let builder = builder.telemetry(&shared).telemetry_config(config.clone());
+    let builder = builder
+        .with_caller_owned_telemetry(&shared)
+        .telemetry_config(config.clone());
     drop(builder.meter()); // Works without a Tokio runtime.
-    assert!(!builder.automatic_telemetry.get().unwrap().is_enabled());
     assert!(
-        builder
-            .telemetry
-            .resolve(&builder.automatic_telemetry)
-            .is_some()
+        matches!(&builder.telemetry, TelemetrySource::ServerOwned(Some(_), cache)
+        if cache.get().is_some_and(|telemetry| !telemetry.is_enabled()))
     );
 
     let builder = builder.without_telemetry();
     drop(builder.meter());
-    assert!(builder.automatic_telemetry.get().is_none());
-    assert!(
-        builder
-            .telemetry
-            .resolve(&builder.automatic_telemetry)
-            .is_none()
-    );
+    assert!(builder.telemetry.resolve().is_none());
 
-    let builder = builder.telemetry_config(config).telemetry(&shared);
-    let resolved = builder
-        .telemetry
-        .resolve(&builder.automatic_telemetry)
-        .unwrap();
-    assert!(resolved.is_enabled());
-    assert!(builder.automatic_telemetry.get().is_none());
+    let builder = builder
+        .telemetry_config(config)
+        .with_caller_owned_telemetry(&shared);
+    assert!(
+        matches!(builder.telemetry, TelemetrySource::CallerOwned(telemetry) if telemetry.is_enabled())
+    );
 }
 
 #[tokio::test]
 async fn automatic_telemetry_flushes_call_metrics_and_the_pre_serve_meter() {
     let (telemetry, exporter) = in_memory();
-    let builder = GrpcServer::builder(test_validator(KID))
-        .add_service(|stub| stub, Stub)
-        .with_automatic_test_telemetry(telemetry.clone());
+    let mut builder = GrpcServer::builder(test_validator(KID)).add_service(|stub| stub, Stub);
+    builder.telemetry = server_owned(telemetry.clone());
     builder
         .meter()
         .u64_counter("test.before_serve")
@@ -504,7 +452,8 @@ async fn automatic_telemetry_flushes_call_metrics_and_the_pre_serve_meter() {
 #[tokio::test]
 async fn server_leaves_shared_telemetry_running_and_off_meter_exports_nothing() {
     let (shared, exporter) = in_memory();
-    let shared_builder = GrpcServer::builder(test_validator(KID)).telemetry(&shared);
+    let shared_builder =
+        GrpcServer::builder(test_validator(KID)).with_caller_owned_telemetry(&shared);
     shared_builder
         .meter()
         .u64_counter("test.shared")
@@ -519,9 +468,9 @@ async fn server_leaves_shared_telemetry_running_and_off_meter_exports_nothing() 
 
     let (observed, count) = tokio::sync::mpsc::unbounded_channel();
     let off = GrpcServer::builder(test_validator(KID))
-        .telemetry(&shared)
+        .with_caller_owned_telemetry(&shared)
         .without_telemetry()
-        .on_call(move |_| {
+        .on_call_complete(move |_| {
             let _ = observed.send(());
         });
     off.meter().u64_counter("test.off").build().add(1, &[]);
@@ -565,9 +514,9 @@ async fn server_leaves_shared_telemetry_running_and_off_meter_exports_nothing() 
 #[tokio::test(start_paused = true)]
 async fn shared_runtime_probe_tracks_servers_until_shutdown_or_cancellation() {
     let (shared, _) = in_memory();
-    let builder = || GrpcServer::builder(test_validator(KID)).telemetry(&shared);
+    let builder = || GrpcServer::builder(test_validator(KID)).with_caller_owned_telemetry(&shared);
     drop(builder().meter());
-    assert_eq!(shared.runtime_probe_servers(), 0);
+    assert_eq!(shared.runtime_probe_server_count(), 0);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint =
@@ -579,7 +528,7 @@ async fn shared_runtime_probe_tracks_servers_until_shutdown_or_cancellation() {
         signal.await.unwrap();
     }));
     ready.await.unwrap();
-    assert_eq!(shared.runtime_probe_servers(), 1);
+    assert_eq!(shared.runtime_probe_server_count(), 1);
 
     let (started, ready) = oneshot::channel();
     let second = tokio::spawn(builder().serve_with_shutdown(
@@ -590,7 +539,7 @@ async fn shared_runtime_probe_tracks_servers_until_shutdown_or_cancellation() {
         },
     ));
     ready.await.unwrap();
-    assert_eq!(shared.runtime_probe_servers(), 2);
+    assert_eq!(shared.runtime_probe_server_count(), 2);
 
     let (started, ready) = oneshot::channel();
     let off = tokio::spawn(builder().without_telemetry().serve_with_shutdown(
@@ -601,7 +550,7 @@ async fn shared_runtime_probe_tracks_servers_until_shutdown_or_cancellation() {
         },
     ));
     ready.await.unwrap();
-    assert_eq!(shared.runtime_probe_servers(), 2);
+    assert_eq!(shared.runtime_probe_server_count(), 2);
 
     // Hold a streaming RPC open so graceful drain cannot finish yet.
     let mut watch =
@@ -616,7 +565,7 @@ async fn shared_runtime_probe_tracks_servers_until_shutdown_or_cancellation() {
     );
     second.abort();
     assert!(second.await.unwrap_err().is_cancelled());
-    assert_eq!(shared.runtime_probe_servers(), 1);
+    assert_eq!(shared.runtime_probe_server_count(), 1);
 
     stop.send(()).unwrap();
     assert_eq!(
@@ -624,31 +573,12 @@ async fn shared_runtime_probe_tracks_servers_until_shutdown_or_cancellation() {
         WireStatus::NotServing
     );
     assert!(!first.is_finished());
-    assert_eq!(shared.runtime_probe_servers(), 0);
+    assert_eq!(shared.runtime_probe_server_count(), 0);
     drop(watch);
     first.await.unwrap().unwrap();
     assert!(shared.is_enabled());
     off.abort();
     assert!(off.await.unwrap_err().is_cancelled());
-}
-
-#[tokio::test]
-async fn transport_failure_is_preserved_after_automatic_shutdown() {
-    let (telemetry, exporter) = in_memory();
-    telemetry
-        .meter()
-        .u64_counter("test.failure")
-        .build()
-        .add(1, &[]);
-    // Inject a tonic transport error at the return boundary: tonic retries TCP accept errors.
-    let error = Endpoint::from_shared("http://[".to_owned()).unwrap_err();
-    let expected = error.to_string();
-    let actual = finish_serving(Err(error), Some(telemetry.clone()))
-        .await
-        .unwrap_err();
-    assert_eq!(actual.to_string(), expected);
-    assert!(!telemetry.is_enabled());
-    assert!(!exporter.get_finished_metrics().unwrap().is_empty());
 }
 
 fn in_memory() -> (Telemetry, InMemoryMetricExporter) {

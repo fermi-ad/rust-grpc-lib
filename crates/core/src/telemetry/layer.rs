@@ -8,77 +8,84 @@ use std::time::Instant;
 
 use http_body::{Body, Frame, SizeHint};
 use pin_project_lite::pin_project;
+use tokio::sync::watch;
 use tonic::Code;
 use tonic::codegen::http::{HeaderMap, Request, Response};
 use tower::{Layer, Service};
 
 use super::{
-    call::{CompletionGuard, Sink},
-    label::LabelIndex,
+    Telemetry,
+    call::CompletionGuard,
+    label::MethodLabelIndex,
+    recorder::{CallCompletionObserver, CallRecorder},
 };
 
 #[cfg(test)]
 mod tests;
 
 #[derive(Clone)]
-pub(crate) struct CallLayer<T> {
-    labels: Arc<LabelIndex>,
-    sink: T,
+pub(crate) struct CallLayer {
+    labels: Arc<MethodLabelIndex>,
+    recorder: Arc<CallRecorder>,
 }
 
 #[derive(Clone)]
-pub(crate) struct CallService<S, T> {
+pub(crate) struct CallService<S> {
     inner: S,
-    labels: Arc<LabelIndex>,
-    sink: T,
+    labels: Arc<MethodLabelIndex>,
+    recorder: Arc<CallRecorder>,
 }
 
 pin_project! {
-    pub(crate) struct CallFuture<F, T: Sink> {
+    pub(crate) struct CallFuture<F> {
         #[pin]
         inner: F,
-        guard: CompletionGuard<T>,
+        guard: CompletionGuard,
     }
 }
 
 pin_project! {
-    pub(crate) struct CallBody<B, T: Sink> {
+    pub(crate) struct CallBody<B> {
         #[pin]
         inner: B,
-        guard: CompletionGuard<T>,
+        guard: CompletionGuard,
     }
 }
 
-impl<T> CallLayer<T> {
-    pub(crate) fn new(labels: LabelIndex, sink: T) -> Self {
+impl CallLayer {
+    pub(crate) fn new(
+        telemetry: &Telemetry,
+        labels: MethodLabelIndex,
+        on_call: Option<CallCompletionObserver>,
+        call_drain_guard: watch::Receiver<()>,
+    ) -> Self {
         Self {
             labels: Arc::new(labels),
-            sink,
+            recorder: Arc::new(CallRecorder::new(telemetry, on_call, call_drain_guard)),
         }
     }
 }
 
-impl<S, T: Sink> Layer<S> for CallLayer<T> {
-    type Service = CallService<S, T>;
+impl<S> Layer<S> for CallLayer {
+    type Service = CallService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
         CallService {
             inner,
             labels: Arc::clone(&self.labels),
-            sink: self.sink.clone(),
+            recorder: Arc::clone(&self.recorder),
         }
     }
 }
 
-impl<S, T, Req, B> Service<Request<Req>> for CallService<S, T>
+impl<S, Req, B> Service<Request<Req>> for CallService<S>
 where
     S: Service<Request<Req>, Response = Response<B>>,
     B: Body,
-    T: Sink,
 {
-    type Response = Response<CallBody<B, T>>;
+    type Response = Response<CallBody<B>>;
     type Error = S::Error;
-    type Future = CallFuture<S::Future, T>;
+    type Future = CallFuture<S::Future>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
@@ -86,8 +93,8 @@ where
 
     fn call(&mut self, request: Request<Req>) -> Self::Future {
         let start = Instant::now();
-        let method = self.labels.resolve(request.uri().path());
-        let guard = CompletionGuard::new(self.sink.clone(), method, start);
+        let method = self.labels.label_for_path(request.uri().path());
+        let guard = CompletionGuard::new(Arc::clone(&self.recorder), method, start);
         CallFuture {
             inner: self.inner.call(request),
             guard,
@@ -95,13 +102,12 @@ where
     }
 }
 
-impl<F, T, B, E> Future for CallFuture<F, T>
+impl<F, B, E> Future for CallFuture<F>
 where
     F: Future<Output = Result<Response<B>, E>>,
     B: Body,
-    T: Sink,
 {
-    type Output = Result<Response<CallBody<B, T>>, E>;
+    type Output = Result<Response<CallBody<B>>, E>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -120,12 +126,12 @@ where
             this.guard.finish(Code::Unknown);
         }
 
-        let guard = this.guard.transfer();
+        let guard = this.guard.take_completion();
         Poll::Ready(Ok(response.map(|inner| CallBody { inner, guard })))
     }
 }
 
-impl<B: Body, T: Sink> Body for CallBody<B, T> {
+impl<B: Body> Body for CallBody<B> {
     type Data = B::Data;
     type Error = B::Error;
 
@@ -135,17 +141,19 @@ impl<B: Body, T: Sink> Body for CallBody<B, T> {
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let mut this = self.project();
         let frame = ready!(this.inner.as_mut().poll_frame(cx));
-        match &frame {
+        let status = match &frame {
             Some(Ok(frame)) => {
                 if let Some(trailers) = frame.trailers_ref() {
-                    this.guard
-                        .finish(status_code(trailers).unwrap_or(Code::Unknown));
-                } else if this.inner.is_end_stream() {
+                    Some(status_code(trailers).unwrap_or(Code::Unknown))
+                } else {
                     // A final data frame may be the last poll the transport makes.
-                    this.guard.finish(Code::Unknown);
+                    this.inner.is_end_stream().then_some(Code::Unknown)
                 }
             }
-            Some(Err(_)) | None => this.guard.finish(Code::Unknown),
+            Some(Err(_)) | None => Some(Code::Unknown),
+        };
+        if let Some(status) = status {
+            this.guard.finish(status);
         }
         Poll::Ready(frame)
     }

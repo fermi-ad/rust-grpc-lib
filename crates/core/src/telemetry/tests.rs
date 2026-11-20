@@ -12,7 +12,7 @@ use opentelemetry_sdk::metrics::{
 use tracing::subscriber::DefaultGuard;
 
 use super::{
-    DEFAULT_DURATION_BUCKETS, Telemetry, TelemetryConfig,
+    DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS, Telemetry, TelemetryConfig,
     opentelemetry::metrics::{MeterProvider, noop::NoopMeterProvider},
 };
 
@@ -25,7 +25,6 @@ fn reexport_exposes_metrics_api() {
 #[tokio::test]
 async fn disabled_paths_have_no_provider() {
     for telemetry in [
-        Telemetry::disabled(),
         Telemetry::start(TelemetryConfig::default()),
         Telemetry::start(
             TelemetryConfig::default()
@@ -55,46 +54,27 @@ async fn duration_histogram_exports_default_bounds_and_seconds() {
         .record(0.015, &[]);
     telemetry.shutdown().await;
     let exported = exporter.get_finished_metrics().unwrap();
-    let mut counts = vec![0; DEFAULT_DURATION_BUCKETS.len() + 1];
+    let mut counts = vec![0; DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS.len() + 1];
     counts[19] = 1;
     assert_histogram(
         &exported[0],
         "test.duration",
-        &DEFAULT_DURATION_BUCKETS,
+        &DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS,
         &counts,
     );
 }
 
 #[tokio::test]
-async fn per_instrument_bounds_do_not_change_configured_bounds() {
-    let (logs, _guard) = capture_logs();
-    let (telemetry, exporter) = in_memory(TelemetryConfig::default().duration_buckets([0.5, 1.0]));
-    telemetry
-        .duration_histogram_with("test.override", "duration", &[0.25])
-        .record(0.5, &[]);
-    telemetry
-        .duration_histogram_with("test.invalid", "duration", &[f64::NAN])
-        .record(8.0, &[]);
+async fn configured_bounds_apply_to_duration_histograms() {
+    let (telemetry, exporter) =
+        in_memory(TelemetryConfig::default().duration_bucket_bounds_seconds([0.5, 1.0]));
     telemetry
         .duration_histogram("test.configured", "duration")
         .record(0.5, &[]);
     telemetry.shutdown().await;
 
     let exported = exporter.get_finished_metrics().unwrap();
-    let mut counts = vec![0; DEFAULT_DURATION_BUCKETS.len() + 1];
-    *counts.last_mut().unwrap() = 1;
-    assert_histogram(
-        &exported[0],
-        "test.invalid",
-        &DEFAULT_DURATION_BUCKETS,
-        &counts,
-    );
     assert_histogram(&exported[0], "test.configured", &[0.5, 1.0], &[1, 0, 0]);
-    assert_histogram(&exported[0], "test.override", &[0.25], &[0, 1]);
-    assert!(
-        logs.text()
-            .contains("invalid duration buckets; using defaults")
-    );
 }
 
 #[tokio::test]

@@ -2,26 +2,30 @@
 
 use std::{env, fmt, path::Path, time::Duration};
 
-use super::buckets::{DEFAULT_DURATION_BUCKETS, validate_buckets};
+use super::LOG_TARGET;
 
 #[cfg(test)]
 mod tests;
 
 const DEFAULT_EXPORT_INTERVAL: Duration = Duration::from_secs(10);
-const LOG_TARGET: &str = "rust_grpc_lib::telemetry";
 
-/// Configuration for server metrics. Constructing it does not start an exporter.
+/// Default duration histogram boundaries in seconds, from 10 µs to 7 s.
+pub const DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS: [f64; 36] = [
+    1e-5, 1.5e-5, 2e-5, 3e-5, 5e-5, 7e-5, 1e-4, 1.5e-4, 2e-4, 3e-4, 5e-4, 7e-4, 1e-3, 1.5e-3, 2e-3,
+    3e-3, 5e-3, 7e-3, 1e-2, 1.5e-2, 2e-2, 3e-2, 5e-2, 7e-2, 1e-1, 1.5e-1, 2e-1, 3e-1, 5e-1, 7e-1,
+    1.0, 1.5, 2.0, 3.0, 5.0, 7.0,
+];
+
+/// Constructing it does not start an exporter. [`Self::default`] reads no
+/// environment variables; the default interval is 10 seconds and the fallback
+/// service name is `unknown_service:<executable>`. [`Self::from_env`] snapshots
+/// the environment; later setters override it.
 ///
-/// [`Self::default`] reads no configuration variables: the SDK is not disabled,
-/// but no endpoint is configured. The interval is 10 seconds, duration histograms
-/// use [`DEFAULT_DURATION_BUCKETS`], and the runtime probe is enabled only when
-/// metrics are enabled. The default service name is `unknown_service:<executable
-/// file name>` (or `unknown_service` if unavailable), and no version is set.
+/// ```
+/// use rust_grpc_lib::telemetry::TelemetryConfig;
 ///
-/// [`Self::from_env`] snapshots the configuration variables. Setters called
-/// afterward take precedence, and the last setter for a field wins. For service
-/// names, the order is explicit setter, `OTEL_SERVICE_NAME`, `service.name` in
-/// `OTEL_RESOURCE_ATTRIBUTES`, then the executable-based fallback.
+/// let config = TelemetryConfig::from_env().service_name("my-service");
+/// ```
 #[derive(Clone)]
 pub struct TelemetryConfig {
     endpoint: Option<String>,
@@ -30,18 +34,11 @@ pub struct TelemetryConfig {
     pub(super) service_name: String,
     pub(super) service_version: Option<String>,
     pub(super) duration_buckets: Vec<f64>,
-    runtime_probe: bool,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum ExportMode<'a> {
-    Disabled,
-    Otlp(&'a str),
-    NoOp,
+    pub(super) runtime_probe: bool,
 }
 
 impl TelemetryConfig {
-    /// Read server metrics settings from the process environment.
+    /// Reads these environment variables:
     ///
     /// | Variable | Effect |
     /// | --- | --- |
@@ -53,29 +50,26 @@ impl TelemetryConfig {
     /// | `OTEL_RESOURCE_ATTRIBUTES` | A non-empty `service.name` is used if `OTEL_SERVICE_NAME` is unset. |
     /// | `GRPC_DURATION_BUCKETS` | Comma-separated boundaries in seconds. Invalid lists warn and use the defaults. |
     /// | `GRPC_RUNTIME_PROBE` | `true` or `false` (case-insensitive); other values warn and use the default. |
-    ///
-    /// Use [`Self::service_version`] to set a version explicitly. This method
-    /// does not read transport credentials or initialize an exporter.
     #[must_use = "this returns the telemetry configuration without starting an exporter"]
     pub fn from_env() -> Self {
         Self::from_lookup(|key| env::var(key).ok())
     }
 
-    /// Set the full OTLP/HTTP metrics URL. An empty URL clears the endpoint.
+    /// An empty URL clears the endpoint.
     #[must_use = "this consumes the config and returns an updated one"]
     pub fn endpoint(mut self, url: impl Into<String>) -> Self {
         self.endpoint = Some(url.into()).filter(|url| !url.is_empty());
         self
     }
 
-    /// Set whether the SDK is disabled, independently of the endpoint.
+    /// Disables export regardless of the endpoint.
     #[must_use = "this consumes the config and returns an updated one"]
     pub fn sdk_disabled(mut self, disabled: bool) -> Self {
         self.sdk_disabled = disabled;
         self
     }
 
-    /// Set the export interval. Zero restores the 10-second default.
+    /// Zero restores the 10-second default.
     #[must_use = "this consumes the config and returns an updated one"]
     pub fn export_interval(mut self, interval: Duration) -> Self {
         self.export_interval = if interval.is_zero() {
@@ -86,7 +80,6 @@ impl TelemetryConfig {
         self
     }
 
-    /// Set the service name, overriding any name from the environment.
     /// An empty name restores the executable-based fallback.
     #[must_use = "this consumes the config and returns an updated one"]
     pub fn service_name(mut self, name: impl Into<String>) -> Self {
@@ -99,50 +92,43 @@ impl TelemetryConfig {
         self
     }
 
-    /// Set the service version. No version is inferred from this crate.
+    /// No version is set unless you call this.
     #[must_use = "this consumes the config and returns an updated one"]
     pub fn service_version(mut self, version: impl Into<String>) -> Self {
         self.service_version = Some(version.into());
         self
     }
 
-    /// Set duration histogram boundaries in seconds.
-    ///
-    /// Boundaries must be non-empty, finite, positive, and strictly increasing.
-    /// An invalid list logs a warning and restores [`DEFAULT_DURATION_BUCKETS`].
+    /// Boundaries (seconds) must be non-empty, finite, positive, and strictly
+    /// increasing; otherwise a warning is logged and
+    /// [`DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS`] is restored.
     #[must_use = "this consumes the config and returns an updated one"]
-    pub fn duration_buckets(mut self, bounds: impl Into<Vec<f64>>) -> Self {
+    pub fn duration_bucket_bounds_seconds(mut self, bounds: impl Into<Vec<f64>>) -> Self {
         let bounds = bounds.into();
-        self.duration_buckets = if validate_buckets(&bounds) {
+        self.duration_buckets = if valid_buckets(&bounds) {
             bounds
         } else {
             tracing::warn!(target: LOG_TARGET, "invalid duration buckets; using defaults");
-            DEFAULT_DURATION_BUCKETS.to_vec()
+            DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS.to_vec()
         };
         self
     }
 
-    /// Set whether to monitor runtime scheduling delay while serving.
-    /// Enabled by default when metrics are enabled; a no-op meter never runs
-    /// the probe. See the [telemetry module](super) for what it measures.
+    /// Records `runtime.scheduling_delay`; on by default when metrics are
+    /// active, one probe per pipeline on the first serving runtime. On a
+    /// multithreaded runtime it detects broad starvation, not one blocked worker.
     #[must_use = "this consumes the config and returns an updated one"]
-    pub fn runtime_probe(mut self, enabled: bool) -> Self {
+    pub fn runtime_scheduling_probe(mut self, enabled: bool) -> Self {
         self.runtime_probe = enabled;
         self
     }
 
-    pub(super) fn export_mode(&self) -> ExportMode<'_> {
+    pub(super) fn export_endpoint(&self) -> Option<&str> {
         if self.sdk_disabled {
-            ExportMode::Disabled
-        } else if let Some(endpoint) = &self.endpoint {
-            ExportMode::Otlp(endpoint)
+            None
         } else {
-            ExportMode::NoOp
+            self.endpoint.as_deref()
         }
-    }
-
-    pub(super) fn runtime_probe_enabled(&self, metrics_enabled: bool) -> bool {
-        self.runtime_probe && metrics_enabled
     }
 
     pub(super) fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
@@ -176,7 +162,7 @@ impl TelemetryConfig {
             runtime_probe,
             service_name,
             service_version: None,
-            duration_buckets: DEFAULT_DURATION_BUCKETS.to_vec(),
+            duration_buckets: DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS.to_vec(),
             export_interval: DEFAULT_EXPORT_INTERVAL,
         }
         .export_interval(export_interval);
@@ -185,7 +171,7 @@ impl TelemetryConfig {
                 .split(',')
                 .map(|part| part.trim().parse::<f64>())
                 .collect::<Result<Vec<_>, _>>();
-            config.duration_buckets(bounds.unwrap_or_default())
+            config.duration_bucket_bounds_seconds(bounds.unwrap_or_default())
         } else {
             config
         }
@@ -211,6 +197,12 @@ impl fmt::Debug for TelemetryConfig {
             .field("runtime_probe", &self.runtime_probe)
             .finish()
     }
+}
+
+fn valid_buckets(bounds: &[f64]) -> bool {
+    !bounds.is_empty()
+        && bounds.iter().all(|&bound| bound.is_finite() && bound > 0.0)
+        && bounds.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 fn metrics_url(mut base: String) -> String {

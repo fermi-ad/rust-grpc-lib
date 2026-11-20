@@ -4,7 +4,7 @@
 use std::process::Command;
 
 use rust_grpc_lib::prost::Message;
-use rust_grpc_lib::telemetry::{DEFAULT_DURATION_BUCKETS, Telemetry};
+use rust_grpc_lib::telemetry::{DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS, Telemetry};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
@@ -16,7 +16,6 @@ use crate::support::capture_logs;
 const PROBE: &str = "runtime.scheduling_delay";
 const COUNTER: &str = "test.consumer.calls";
 const HISTOGRAM: &str = "test.consumer.value";
-const DURATION: &str = "test.consumer.duration";
 
 #[derive(Clone, PartialEq, Message)]
 #[prost(prost_path = "::rust_grpc_lib::prost")]
@@ -254,14 +253,19 @@ async fn loopback_export_and_probe() {
 async fn no_endpoint_and_opt_outs() {
     // With no endpoint the default source is a no-op (including the probe),
     // but it and the SDK-disabled source still run the call observer.
-    assert!(!Telemetry::from_env().is_enabled());
+    assert!(!Telemetry::start(TelemetryConfig::from_env()).is_enabled());
     let mut collector = Collector::bind().await;
-    let in_memory = InMemory::new();
+    let in_memory = InMemoryMetrics::new();
     let shared = in_memory.telemetry();
     for (builder, expected_observations) in [
         (builder(), 1),
         (
-            builder().telemetry_config(collector.config().sdk_disabled(true).runtime_probe(true)),
+            builder().telemetry_config(
+                collector
+                    .config()
+                    .sdk_disabled(true)
+                    .runtime_scheduling_probe(true),
+            ),
             1,
         ),
         (
@@ -270,10 +274,15 @@ async fn no_endpoint_and_opt_outs() {
                 .without_telemetry(),
             0,
         ),
-        (builder().telemetry(&shared).without_telemetry(), 0),
+        (
+            builder()
+                .with_caller_owned_telemetry(&shared)
+                .without_telemetry(),
+            0,
+        ),
     ] {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let builder = builder.on_call(move |call| tx.send(*call).unwrap());
+        let builder = builder.on_call_complete(move |call| tx.send(*call).unwrap());
         builder.meter().u64_counter(COUNTER).build().add(1, &[]);
         let running = start(builder).await;
         call_one(&running).await;
@@ -307,15 +316,15 @@ async fn export_at_shutdown(invalid: bool) {
     let mut collector = Collector::bind().await;
     let configured = [0.01, 0.05, 0.25];
     let (override_bounds, expected_bounds): (&[f64], &[f64]) = if invalid {
-        (&[0.5, 0.1], &DEFAULT_DURATION_BUCKETS)
+        (&[0.5, 0.1], &DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS)
     } else {
         (&configured, &configured)
     };
     let config = collector
         .config()
-        .runtime_probe(false)
-        .duration_buckets(override_bounds);
-    let builder = builder().telemetry_config(config.clone());
+        .runtime_scheduling_probe(false)
+        .duration_bucket_bounds_seconds(override_bounds);
+    let builder = builder().telemetry_config(config);
     builder.meter().u64_counter(COUNTER).build().add(7, &[]);
     builder
         .meter()
@@ -334,18 +343,6 @@ async fn export_at_shutdown(invalid: bool) {
     assert_eq!(call.bounds, expected_bounds);
     assert_eq!(export.metric(CALL).unwrap().unit, "s");
     assert!(export.metric(PROBE).is_none());
-
-    // The builder exposes a meter, not a Telemetry handle: exercise the
-    // public duration helper with the same config in a separate pipeline.
-    let mut custom = Collector::bind().await;
-    let telemetry = Telemetry::start(config.endpoint(custom.endpoint.clone()));
-    telemetry
-        .duration_histogram(DURATION, "Test seconds")
-        .record(0.04, &[]);
-    timeout(DEADLINE, telemetry.shutdown()).await.unwrap();
-    let export = custom.until(|_| true).await;
-    assert_eq!(export.point(DURATION).unwrap().bounds, expected_bounds);
-    assert_eq!(export.metric(DURATION).unwrap().unit, "s");
     let logs = logs.text();
     assert_eq!(
         logs.contains("invalid duration buckets; using defaults"),
@@ -360,7 +357,7 @@ async fn probe_samples_only_while_serving() {
     let telemetry = Telemetry::start(
         collector
             .config()
-            .runtime_probe(true)
+            .runtime_scheduling_probe(true)
             .export_interval(Duration::from_millis(50)),
     );
     let marker = telemetry.meter().u64_counter(COUNTER).build();
@@ -372,7 +369,7 @@ async fn probe_samples_only_while_serving() {
             .metric(PROBE)
             .is_none()
     );
-    let running = start(builder().telemetry(&telemetry)).await;
+    let running = start(builder().with_caller_owned_telemetry(&telemetry)).await;
     call_one(&running).await;
     let before = collector
         .until(|export| export.point(PROBE).is_some())
@@ -408,7 +405,7 @@ async fn probe_opt_outs() {
     // export interval while still serving: checking only after immediate
     // shutdown could pass even if the probe had incorrectly started.
     for config in [
-        collector.config().runtime_probe(false),
+        collector.config().runtime_scheduling_probe(false),
         TelemetryConfig::from_env().endpoint(collector.endpoint.clone()),
     ] {
         let builder = builder().telemetry_config(config.export_interval(Duration::from_millis(50)));

@@ -24,7 +24,7 @@ use tower::{Layer, Service, service_fn};
 use super::{super::tests::capture_logs, *};
 use crate::{
     auth::{Access, MethodPolicy, PolicyTable, ServicePolicy},
-    telemetry::{TelemetryConfig, label::MethodLabels},
+    telemetry::{TelemetryConfig, label::MethodLabelIndex, layer::CallLayer},
 };
 
 const METHOD: &str = "pkg.Service/GetValue";
@@ -260,7 +260,7 @@ async fn noop_meter_still_notifies_observer() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     let summaries = Arc::clone(&observed);
     let layer = layer(
-        &Telemetry::disabled(),
+        &Telemetry::start(TelemetryConfig::default()),
         Some(Arc::new(move |summary| {
             summaries.lock().unwrap().push(*summary)
         })),
@@ -285,20 +285,20 @@ fn telemetry() -> (Telemetry, impl MetricReader) {
     (
         Telemetry::from_reader(
             reader.clone(),
-            TelemetryConfig::default().duration_buckets(BOUNDS),
+            TelemetryConfig::default().duration_bucket_bounds_seconds(BOUNDS),
         ),
         reader,
     )
 }
 
-fn layer(telemetry: &Telemetry, on_call: Option<OnCall>) -> CallLayer<Recorder> {
-    let mut labels = LabelIndex::new();
-    labels.register(MethodLabels {
-        service_name: "pkg.Service",
-        wire_methods: &[METHOD],
-        table: PolicyTable::of::<(), TestPolicy>(),
-    });
-    CallLayer::recording(telemetry, labels, on_call, watch::channel(()).1)
+fn layer(telemetry: &Telemetry, on_call: Option<CallCompletionObserver>) -> CallLayer {
+    let mut labels = MethodLabelIndex::new();
+    labels.register(
+        "pkg.Service",
+        &[METHOD],
+        PolicyTable::of::<(), TestPolicy>(),
+    );
+    CallLayer::new(telemetry, labels, on_call, watch::channel(()).1)
 }
 
 fn request<T>(path: &str, body: T) -> Request<T> {

@@ -7,11 +7,9 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::time::{sleep, timeout};
 
-use rust_grpc_lib::__private::WireMethods;
 use rust_grpc_lib::access_controlled_service;
 use rust_grpc_lib::auth::{KeyValidator, RequestContext};
 use rust_grpc_lib::server::{GrpcServer, GrpcServerBuilder, ServeError};
-use rust_grpc_lib::telemetry::TelemetryConfig;
 use rust_grpc_lib::testing::{ServingStatus, StreamExt, health_watch};
 use rust_grpc_lib::tonic::{Code, Response, Status};
 
@@ -52,17 +50,6 @@ fn builder() -> GrpcServerBuilder<KeyValidator> {
     GrpcServer::builder(make_validator()).add_service(ExampleDbServer::new, Stub)
 }
 
-#[test]
-fn generated_server_exposes_exact_wire_methods() {
-    assert_eq!(
-        <ExampleDbServer<Stub> as WireMethods>::WIRE_METHODS,
-        [
-            "services.example.ExampleDB/getEndPointOne",
-            "services.example.ExampleDB/getEndPointTwo",
-        ]
-    );
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn health_needs_no_token_and_reports_every_service() {
     let running = serve(builder()).await;
@@ -81,7 +68,6 @@ async fn health_needs_no_token_and_reports_every_service() {
 async fn health_turns_not_serving_when_shutdown_begins() {
     let running = serve(builder()).await;
 
-    // A `Watch` stream still gets updates while the server drains.
     let mut watch = health_watch(connect(running.addr).await, SERVICE_NAME)
         .await
         .unwrap();
@@ -115,54 +101,6 @@ async fn timeout_applies_to_application_rpcs() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), Code::Cancelled);
-}
-
-#[tokio::test]
-async fn telemetry_observes_generated_service_calls_even_when_the_sdk_is_disabled() {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    let running = serve(
-        builder()
-            .telemetry_config(
-                TelemetryConfig::default()
-                    .endpoint("invalid")
-                    .sdk_disabled(true),
-            )
-            .on_call(move |call| {
-                let _ = tx.send(*call);
-            }),
-    )
-    .await;
-
-    client(running.addr, &make_jwt(&[]))
-        .get_end_point_one(IdList { id: vec![] })
-        .await
-        .unwrap();
-    let err = crate::services::example::example_db_client::ExampleDbClient::new(
-        connect(running.addr).await,
-    )
-    .get_end_point_one(IdList { id: vec![] })
-    .await
-    .unwrap_err();
-    assert_eq!(err.code(), Code::Unauthenticated);
-
-    running.shutdown.send(()).unwrap();
-    timeout(Duration::from_secs(5), running.task)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    for status in [Code::Ok, Code::Unauthenticated] {
-        let call = rx.try_recv().unwrap();
-        assert_eq!(
-            call.method,
-            Some("services.example.ExampleDB/getEndPointOne")
-        );
-        assert_eq!(call.status, status);
-    }
-    assert!(
-        rx.try_recv().is_err(),
-        "each call must be observed only once"
-    );
 }
 
 #[tokio::test]

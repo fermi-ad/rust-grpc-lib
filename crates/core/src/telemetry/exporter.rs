@@ -15,7 +15,7 @@ mod tests;
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) type ShutdownRequest = oneshot::Sender<oneshot::Sender<bool>>;
+pub(super) type ProviderShutdownSender = oneshot::Sender<oneshot::Sender<bool>>;
 
 pub(super) fn otlp_reader(
     endpoint: &str,
@@ -38,11 +38,11 @@ pub(super) fn otlp_reader(
         .build())
 }
 
-pub(super) fn start(
+pub(super) fn start_provider_worker(
     build_provider: impl FnOnce() -> Result<SdkMeterProvider, &'static str> + Send + 'static,
-) -> Result<(Meter, ShutdownRequest), &'static str> {
+) -> Result<(Meter, ProviderShutdownSender), &'static str> {
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-    let (request_tx, request_rx) = oneshot::channel::<oneshot::Sender<bool>>();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<oneshot::Sender<bool>>();
     thread::Builder::new()
         .name("grpc-telemetry".into())
         .spawn(move || {
@@ -54,26 +54,27 @@ pub(super) fn start(
                 }
             };
             let _ = ready_tx.send(Ok(provider.meter(METER_NAME)));
-            // The same thread owns the provider throughout its lifetime: even
-            // dropping the last Telemetry without shutdown does not block Tokio.
-            let reply = request_rx.blocking_recv().ok();
-            let flushed = reply.is_none() || provider.force_flush().is_ok();
-            let stopped = provider.shutdown().is_ok();
-            drop(provider);
-            if let Some(reply) = reply {
+            // Keep provider teardown off Tokio even if the last handle drops
+            // without sending a shutdown request.
+            if let Ok(reply) = shutdown_rx.blocking_recv() {
+                let flushed = provider.force_flush().is_ok();
+                let stopped = provider.shutdown().is_ok();
+                drop(provider);
                 let _ = reply.send(flushed && stopped);
+            } else {
+                let _ = provider.shutdown();
             }
         })
         .map_err(|_| "could not spawn telemetry thread")?;
     let meter = ready_rx
         .recv()
         .map_err(|_| "telemetry thread stopped during startup")??;
-    Ok((meter, request_tx))
+    Ok((meter, shutdown_tx))
 }
 
-pub(super) async fn shutdown(request: ShutdownRequest) {
+pub(super) async fn flush_and_shutdown_provider(shutdown_tx: ProviderShutdownSender) {
     let (reply, result) = oneshot::channel();
-    if request.send(reply).is_err() {
+    if shutdown_tx.send(reply).is_err() {
         tracing::warn!(target: LOG_TARGET, "telemetry shutdown failed: lifecycle thread stopped");
         return;
     }
