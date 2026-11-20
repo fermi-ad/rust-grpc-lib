@@ -21,14 +21,24 @@ test-util = [
     "dep:jsonwebtoken",
     "dep:serde_json",
     "dep:tracing-subscriber",
+    "opentelemetry_sdk/testing",
     "rust-auth-lib/test-fixtures",
 ]
 server = [
     "dep:futures-util",
+    "dep:http-body",
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
     "dep:pin-project-lite",
     "dep:tonic-health",
     "dep:tower",
     "dep:tower-http",
+    "tokio/rt",
+    "tokio/signal",
+    "tokio/sync",
+    "tokio/time",
+    "tower/util",
 ]
 
 [dependencies]
@@ -51,9 +61,17 @@ futures-util = { version = "0.3", default-features = false, optional = true }
 pin-project-lite = { version = "0.2", optional = true }
 tower = { version = "0.5", default-features = false, optional = true }
 tower-http = { version = "0.6", default-features = false, features = ["trace"], optional = true }
+http-body = { version = "1", optional = true }
+opentelemetry = { version = "=0.33.1", default-features = false, features = ["metrics"], optional = true }
+# Exposes the MetricReader trait for the shared provider constructor; implies metrics.
+opentelemetry_sdk = { version = "=0.33.1", default-features = false, features = ["experimental_metrics_custom_reader"], optional = true }
+opentelemetry-otlp = { version = "=0.33.1", default-features = false, features = ["http-proto", "metrics", "reqwest-blocking-client", "reqwest-rustls"], optional = true }
 
 [dev-dependencies]
 http-body = "1"
+opentelemetry = { version = "=0.33.1", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "=0.33.1", default-features = false, features = ["experimental_metrics_custom_reader", "testing"] }
+opentelemetry-otlp = { version = "=0.33.1", default-features = false, features = ["http-proto", "metrics", "reqwest-blocking-client", "reqwest-rustls"] }
 jsonwebtoken = "11"
 serde_json = "1"
 futures-util = { version = "0.3", default-features = false }
@@ -62,7 +80,7 @@ tower = { version = "0.5", default-features = false, features = ["util"] }
 tower-http = { version = "0.6", default-features = false, features = ["trace"] }
 tracing-subscriber = "0.3"
 tonic-health = "0.14"
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "time"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "signal", "sync", "test-util", "time"] }
 protoc-bin-vendored = "3"
 tonic-prost-build = "0.14"
 regex = "1"

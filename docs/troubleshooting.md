@@ -52,7 +52,9 @@ The complete list is under "Compile errors" in the `access_controlled_service` r
 | Client gets `Cancelled` | The server's `.timeout()` elapsed and the handler was dropped | Raise the timeout or speed up the handler |
 | A long-lived stream keeps running after the token expired | Expiry is checked only when the call starts | Re-check `ctx.is_expired()` in the handler |
 | Keep-alive variable change has no effect | Read once, when an endpoint's channel is created; the pool never evicts | Set it before the first client for that endpoint |
-| Graceful shutdown hangs | Open streams, including health `Watch`, delay it | End streams or bound the shutdown with a timeout |
 | No `rpc` span fields in logs | The subscriber does not log span close events | Enable `FmtSpan::CLOSE`, or log inside the span; see [Tracing and logs](server.md#tracing-and-logs) |
+| No metrics appear | No endpoint, SDK disabled, layer removed, or collector unreachable | Check the effective [telemetry settings](server.md#environment-variables) and logs. Use an OTLP/HTTP URL (normally port 4318 and `/v1/metrics`), send an RPC, and allow an export interval. An observer can still run with a no-op meter. |
+| Shutdown takes about 30 seconds | A connection has an open RPC, such as a health `Watch` | Close streams when finished. Tune the [drain grace](server.md#graceful-shutdown) if appropriate, and allow separate time for the telemetry flush. |
+| Signal handler registration failed | Default process handlers could not be registered | Inspect the I/O error in `ServeError::Signal` and ensure Tokio I/O is enabled. If your application owns the shutdown trigger, use `serve_with_shutdown` or `serve_on_listener`. |
 | `capture_spans` records nothing | The test uses a `multi_thread` runtime | Use the default current-thread `#[tokio::test]` |
 | A passing handler unit test, but the policy is wrong | `authenticated_request` bypasses the gate | Add a live-server test and `assert_policy_table_conforms`; see [Testing](testing.md#conformance-checks) |

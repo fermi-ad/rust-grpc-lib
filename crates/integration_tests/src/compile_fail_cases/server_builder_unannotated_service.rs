@@ -5,6 +5,7 @@ use std::future::{Ready, ready};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use rust_grpc_lib::__private::WireMethods;
 use rust_grpc_lib::auth::KeyValidator;
 use rust_grpc_lib::server::GrpcServer;
 use rust_grpc_lib::tonic::body::Body;
@@ -44,6 +45,10 @@ impl<T> Service<Request<Body>> for UnannotatedServer<T> {
 
 impl<T> NamedService for UnannotatedServer<T> {
     const NAME: &'static str = "pkg.Unannotated";
+}
+
+impl<T> WireMethods for UnannotatedServer<T> {
+    const WIRE_METHODS: &'static [&'static str] = &[];
 }
 
 fn wire(validator: Arc<KeyValidator>) {

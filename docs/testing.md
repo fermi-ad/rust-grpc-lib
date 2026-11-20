@@ -140,3 +140,33 @@ async fn emits_rpc_span() {
 ```
 
 `spans.spans("rpc")` returns `SpanRecord`s (`name()`, `field(..)`, `has_field(..)`). The subscriber is thread-local, so a `multi_thread` runtime loses spans. Only spans are captured, not events. The fields are listed under [Tracing and logs](server.md#tracing-and-logs).
+
+## Metrics
+
+`TestServer` binds a fresh IPv4 loopback port, supplies a validator for the test key, and waits for health before returning from `start()`. It does not register process signals or use environment-configured exporters. Add your generated service with `.add_service(FooServer::new, implementation)`. Clients can use `server.url()` and mint a bearer token with `server.token(sub, roles)` for protected RPCs. Enable `.with_metrics()` before starting to read `server.metrics()`; calling it without that option panics.
+
+```rust
+use rust_grpc_lib::{
+    testing::{TestServer, health_status},
+    tonic::{Code, transport::Channel},
+};
+
+#[tokio::test]
+async fn records_health_calls() {
+    let server = TestServer::builder("test-kid").with_metrics().start().await;
+    let channel = Channel::from_shared(server.url().to_owned()).unwrap().connect().await.unwrap();
+    let error = health_status(channel, "example.unregistered.Service").await.unwrap_err();
+    assert_eq!(error.code(), Code::NotFound);
+    // This status excludes the harness's successful startup checks.
+    assert_eq!(server.metrics().wait_for_call_count("grpc.health.v1.Health/Check", Code::NotFound).await, 1);
+    server.shutdown().await;
+}
+```
+
+`shutdown().await` asserts the server drains within the harness timeout (five seconds by default, configurable with `.shutdown_timeout(duration)`) and then shuts down its metrics with a separate flush budget. Drop any open streams first. Dropping the harness instead aborts the server without waiting.
+
+For an existing server fixture, create `InMemoryMetrics::new()` and inject `.with_caller_owned_telemetry(&metrics.telemetry())`. It uses a real SDK meter without a collector or runtime probe. The fixture owns the provider: after serving ends, call `metrics.telemetry().shutdown().await`. Snapshots remain readable after shutdown.
+
+- `histograms(name)` returns `HistogramSnapshot` points with unit, attributes, count, sum, min, max, bounds and bucket counts (including overflow).
+- `counters(name)` returns `CounterSnapshot` points with attributes and cumulative value, including points for up-down counters. Snapshot attributes are rendered as strings, even when exported values are numeric.
+- `wait_for_call_count(method, code).await` waits up to five seconds for a nonzero cumulative count for the exact metric label (or `_OTHER`) and status. A read immediately after a client response can race with the server task; cancellation is tracked only once the server notices the drop. To check a specific count or other condition, use `wait_until(|metrics| ..., timeout).await`. Both poll and panic with recorded series on timeout. Account for startup health checks when asserting exact counts.

@@ -1,12 +1,6 @@
-//! Post-processes the code tonic-build generates so that it names `tonic`
-//! through `::rust_grpc_lib::__private`, and the consuming crate needs no
-//! `tonic` dependency of its own.
-//!
-//! tonic-build writes every tonic path as `tonic::...`, with no leading `::`
-//! and no option to change the prefix, so the paths are rewritten in the
-//! generated files, line by line. (The codec and prost paths do have options;
-//! see `compile`.) Entry points: [`qualify_tonic_paths`] and
-//! [`rewrite_generated_files`].
+//! Rewrites tonic-build output to name `tonic` through
+//! `::rust_grpc_lib::__private`, because tonic-build has no option to change
+//! that prefix. The pass also adds wire method metadata.
 
 use std::{
     borrow::Cow,
@@ -36,22 +30,14 @@ static TONIC_PATH_START: LazyLock<Regex> =
 // Where `tonic` lives from a consumer's point of view: `rust-grpc-lib`
 // re-exports it under `__private`.
 const REPLACEMENT: &str = "${1}::rust_grpc_lib::__private::tonic::";
+const NAMED_SERVICE_IMPL: &str =
+    "    impl<T> ::rust_grpc_lib::__private::tonic::server::NamedService for ";
+const WIRE_METHODS_IMPL: &str = "    impl<T> ::rust_grpc_lib::__private::WireMethods for ";
 
-/// Rewrites each path-start `tonic::` in `line` to
-/// `::rust_grpc_lib::__private::tonic::`, returning `line` itself if there is
-/// none.
-///
-/// A path starts at `tonic::` when the preceding character is not part of an
-/// identifier and is not `:`, `.` or `#`. So these are left alone:
-///
-/// - `tonic_prost::ProstCodec` and `mytonic::x` (different identifiers),
-/// - `::tonic::x` and `a::tonic::x` (already qualified; this also makes the
-///   function idempotent),
-/// - `x.tonic::<T>()` (a method call) and `r#tonic::x` (a raw identifier).
-///
-/// Lines whose first non-blank text is `//` (comments, including docs) are
-/// returned unchanged. A `tonic::` inside a string literal is rewritten like
-/// any other; tonic-build writes no such strings.
+/// Qualifies each path-start `tonic::`; already-qualified paths, other
+/// identifiers, method calls and raw identifiers are left alone, so it is
+/// idempotent. Comment lines are unchanged; a `tonic::` inside a string
+/// literal is rewritten (tonic-build writes none).
 pub(super) fn qualify_tonic_paths(line: &str) -> Cow<'_, str> {
     if line.trim_start().starts_with("//") {
         return Cow::Borrowed(line);
@@ -59,12 +45,8 @@ pub(super) fn qualify_tonic_paths(line: &str) -> Cow<'_, str> {
     TONIC_PATH_START.replace_all(line, REPLACEMENT)
 }
 
-/// Applies [`qualify_tonic_paths`] to the files tonic-build generated in
-/// `out_dir` for `packages` (proto package names), plus `google.protobuf.rs`
-/// when it exists. No other file in `out_dir` is read or written.
-///
-/// Fails, naming the file, if a package's file is missing or a file cannot be
-/// read or written.
+/// Rewrites only the files for `packages` and `google.protobuf.rs` if present.
+/// Errors name the offending file.
 pub(super) fn rewrite_generated_files(out_dir: &Path, packages: &[String]) -> Result<(), String> {
     for package in packages {
         let path = out_dir.join(format!("{}.rs", package_to_file_stem(package)));
@@ -93,12 +75,41 @@ fn rewrite_file(path: &Path) -> io::Result<()> {
     let mut writer = BufWriter::new(File::create(temp_path)?);
 
     let mut line = String::new();
+    let mut server_wire_methods = None;
     loop {
         line.clear();
         if reader.read_line(&mut line)? == 0 {
             break;
         }
-        writer.write_all(qualify_tonic_paths(&line).as_bytes())?;
+        let qualified = qualify_tonic_paths(&line);
+        let text = qualified.trim_end_matches(['\r', '\n']);
+        // tonic-build emits unindented module boundaries. On a repeat pass,
+        // our WireMethods impl appears before the NamedService anchor.
+        if text.starts_with("pub mod ") {
+            server_wire_methods = text.ends_with("_server {").then(Vec::new);
+        } else if text == "}" || text.starts_with(WIRE_METHODS_IMPL) {
+            server_wire_methods = None;
+        } else if let Some(wire_methods) = &mut server_wire_methods {
+            if let Some(wire_method) = text
+                .trim_start()
+                .strip_prefix("\"/")
+                .and_then(|arm| arm.strip_suffix("\" => {"))
+            {
+                wire_methods.push(wire_method.to_owned());
+            } else if let Some(server_type) = text
+                .strip_prefix(NAMED_SERVICE_IMPL)
+                .and_then(|tail| tail.strip_suffix("<T> {"))
+            {
+                write_wire_methods_impl(
+                    &mut writer,
+                    server_type,
+                    wire_methods,
+                    &qualified[text.len()..],
+                )?;
+                server_wire_methods = None;
+            }
+        }
+        writer.write_all(qualified.as_bytes())?;
     }
     writer.flush()?;
 
@@ -106,6 +117,30 @@ fn rewrite_file(path: &Path) -> io::Result<()> {
     drop(writer);
 
     fs::rename(temp_path, path)
+}
+
+fn write_wire_methods_impl(
+    writer: &mut impl Write,
+    server_type: &str,
+    wire_methods: &[String],
+    line_ending: &str,
+) -> io::Result<()> {
+    write!(
+        writer,
+        "{WIRE_METHODS_IMPL}{server_type}<T> {{{line_ending}"
+    )?;
+    write!(
+        writer,
+        "        const WIRE_METHODS: &'static [&'static str] = &["
+    )?;
+    if !wire_methods.is_empty() {
+        write!(writer, "{line_ending}")?;
+        for wire_method in wire_methods {
+            write!(writer, "            \"{wire_method}\",{line_ending}")?;
+        }
+        write!(writer, "        ")?;
+    }
+    write!(writer, "];{line_ending}    }}{line_ending}")
 }
 
 fn describe(path: &Path, error: &io::Error) -> String {

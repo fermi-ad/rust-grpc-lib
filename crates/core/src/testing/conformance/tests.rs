@@ -1,10 +1,6 @@
-//! Tests for the conformance helpers.
-//!
-//! The path validation is tested directly. [`assert_policy_table_conforms`]
-//! runs here against a hand-written stand-in for a generated server, behind the
-//! real gate, so the table-driven checks (including the ones that must fail)
-//! are covered without a generated service. The helpers against generated
-//! services are covered in the `integration_tests` crate.
+//! [`assert_policy_table_conforms`] runs here against a hand-written stand-in
+//! for a generated server; the helpers against generated services are covered
+//! in the `integration_tests` crate.
 
 use super::*;
 
@@ -20,6 +16,7 @@ use tonic::body::Body;
 use tonic::codegen::Service;
 use tonic::codegen::http::{Request as HttpRequest, Response as HttpResponse};
 
+use crate::__private::WireMethods;
 use crate::auth::policy::MethodPolicy;
 use crate::server::GrpcServer;
 use crate::testing::test_validator;
@@ -70,10 +67,6 @@ fn malformed_paths_are_rejected() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// `assert_policy_table_conforms`
-// ---------------------------------------------------------------------------
-
 /// A stand-in for a generated server: it answers every call with the status
 /// its `behavior` picks for the request path, and records the paths it saw.
 #[derive(Clone)]
@@ -84,6 +77,15 @@ struct Stand {
 
 impl tonic::server::NamedService for Stand {
     const NAME: &'static str = "pkg.Stand";
+}
+
+impl WireMethods for Stand {
+    const WIRE_METHODS: &'static [&'static str] = &[
+        "pkg.Stand/get_data",
+        "pkg.Stand/list_items",
+        "pkg.Stand/ping",
+        "pkg.Stand/delete_item",
+    ];
 }
 
 impl Service<HttpRequest<Body>> for Stand {
@@ -125,7 +127,6 @@ impl ServicePolicy<Stand> for Table {
     ];
 }
 
-/// A table with no methods at all.
 struct EmptyTable;
 
 impl ServicePolicy<Stand> for EmptyTable {
@@ -142,7 +143,6 @@ fn empty_stand(_: EmptyTable) -> Stand {
     unreachable!("the constructor only names the types")
 }
 
-/// A server that stops when dropped.
 struct Live {
     addr: SocketAddr,
     seen: Arc<Mutex<Vec<String>>>,
@@ -231,7 +231,6 @@ async fn a_gated_service_with_public_authenticated_and_role_gated_methods_confor
 
     assert_policy_table_conforms(live.channel().await, table_stand).await;
 
-    // Only the public method gets past the gate to the handler.
     assert_eq!(live.seen(), ["/pkg.Stand/ping"]);
 }
 

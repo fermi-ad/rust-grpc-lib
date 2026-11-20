@@ -1,64 +1,27 @@
-//! Serve gRPC services behind the access gate, with health checks, per-RPC
-//! tracing, an optional timeout and graceful shutdown (`server` feature).
+//! Serves gRPC services behind the access gate, with health checks, per-RPC
+//! tracing and graceful shutdown (`server` feature). [`GrpcServer::builder`] is
+//! the only way to serve services; auth cannot be switched off.
 //!
-//! [`GrpcServer::builder`] is the only way to serve services with this crate.
-//! Each RPC passes through the trace layer (outermost), then the service's
-//! gate, then the generated server.
-//!
-//! - **Access control.** [`add_service`](GrpcServerBuilder::add_service)
-//!   only accepts implementations annotated with
-//!   [`#[access_controlled_service]`](crate::access_controlled_service), and
-//!   their per-method policies are enforced before any handler runs. Auth
-//!   cannot be switched off: the only open endpoints are `#[public]` methods
-//!   and health.
-//! - **Health.** `grpc.health.v1.Health` needs no token. The overall service
-//!   (`""`) and every added service report `Serving` once the server starts
-//!   and `NotServing` as soon as the shutdown signal fires, before draining.
-//! - **Tracing.** Every RPC, including health calls and rejections, gets an
-//!   `rpc` span on target `rust_grpc_lib::trace` with the fields `rpc.system`,
-//!   `rpc.service`, `rpc.method`, `grpc.status`, `latency_ms`, `stream_ms`,
-//!   `access` and `user`. The gate records `access` (not for health,
-//!   unparsable paths or unknown methods) and `user` (once a token
-//!   validates). A response dropped before it is produced (client cancel or
-//!   timeout) records `grpc.status` as `Cancelled`; a cancel mid-stream
-//!   leaves it unset.
-//!
-//! # Example
-//!
-//! The validator is typically a `KeyValidator`; tests can use
-//! `testing::test_validator` (`test-util` feature). For a runnable server
-//! with a real generated service, see the
-//! [service template](https://github.com/fermi-ad/rust-grpc-service-template);
-//! `docs/server.md` covers policies, gate status codes and log filtering.
+//! Health reports `NotServing` as soon as shutdown fires, before the drain.
 //!
 //! ```rust,no_run
-//! # use std::{future::Future, sync::Arc, time::Duration};
+//! # use std::{sync::Arc, time::Duration};
+//! # use rust_grpc_lib::__private::WireMethods;
 //! # use rust_grpc_lib::auth::{ServicePolicy, TokenValidator};
 //! # use rust_grpc_lib::server::{GrpcServer, GrpcService, ServeError};
-//! # async fn run<V: TokenValidator, T: ServicePolicy<S>, S: GrpcService>(
+//! # async fn run<V: TokenValidator, T: ServicePolicy<S>, S: GrpcService + WireMethods>(
 //! #     validator: Arc<V>,
 //! #     new_server: fn(T) -> S,
 //! #     my_impl: T,
-//! #     shutdown: impl Future<Output = ()>,
 //! # ) -> Result<(), ServeError> {
 //! // `new_server` is a generated constructor such as `FooServer::new`.
 //! GrpcServer::builder(validator)
 //!     .timeout(Duration::from_secs(30))
 //!     .add_service(new_server, my_impl)
-//!     .serve_with_shutdown("0.0.0.0:50051".parse().unwrap(), shutdown)
+//!     .serve("0.0.0.0:50051".parse().unwrap())
 //!     .await
 //! # }
 //! ```
-//!
-//! # Serve methods
-//!
-//! | Method | Returns | Notes |
-//! |---|---|---|
-//! | [`serve`](GrpcServerBuilder::serve) | `Result<Infallible, ServeError>` | Binds; never returns `Ok` |
-//! | [`serve_with_shutdown`](GrpcServerBuilder::serve_with_shutdown) | `Result<(), ServeError>` | Binds; `Ok(())` after graceful shutdown |
-//! | [`serve_on_listener`](GrpcServerBuilder::serve_on_listener) | `Result<(), ServeError>` | Your listener; never `ServeError::Bind` |
-//!
-//! All three return [`ServeError`], so `?` unifies them in one function.
 
 use std::convert::Infallible;
 use std::error::Error;
@@ -66,10 +29,11 @@ use std::fmt;
 use std::future::{Future, pending};
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use tokio::net::TcpListener;
+use opentelemetry::metrics::Meter;
+use tokio::{net::TcpListener, sync::oneshot, time::sleep};
 use tonic::body::Body;
 use tonic::codegen::Service;
 use tonic::codegen::http::{Request, Response};
@@ -79,16 +43,30 @@ use tonic::transport::server::TcpIncoming;
 use tonic::transport::{Error as TransportError, Server};
 use tonic_health::ServingStatus;
 use tonic_health::server::{HealthReporter, health_reporter};
+use tower::{
+    ServiceBuilder,
+    util::{Either, MapResponseLayer},
+};
 
+use crate::__private::WireMethods;
 use crate::auth::gate::AuthGate;
 use crate::auth::{PolicyTable, ServicePolicy, TokenValidator};
+use crate::telemetry::{
+    CallSummary, Telemetry, TelemetryConfig, label::MethodLabelIndex, layer::CallLayer,
+    recorder::CallCompletionObserver,
+};
 use crate::trace::GrpcTraceLayer;
 
+mod connections;
+mod shutdown;
 #[cfg(test)]
 mod tests;
 
-/// The bounds a tonic service needs to be served, such as a generated
-/// `FooServer<T>`. Blanket-implemented; never implement it by hand.
+pub use shutdown::shutdown_signal;
+
+const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+
+/// Blanket-implemented; never implement it by hand.
 // Mirrors the bounds of tonic's `Router::add_service`, spelled with concrete
 // request and response types so the signature does not need to name `axum`.
 pub trait GrpcService:
@@ -115,12 +93,20 @@ impl<S> GrpcService for S where
 {
 }
 
-/// Entry point for building a server. See the [module docs](self).
+/// Entry point for serving; start with [`GrpcServer::builder`].
 #[derive(Debug, Clone, Copy)]
 pub struct GrpcServer;
 
 impl GrpcServer {
     /// Starts a builder that authenticates calls with `validator`.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use rust_grpc_lib::{auth::TokenValidator, server::GrpcServer};
+    /// # fn run<V: TokenValidator>(validator: Arc<V>) {
+    /// let builder = GrpcServer::builder(validator);
+    /// # }
+    /// ```
     #[must_use = "a builder does nothing until services are added and `serve*` is called"]
     pub fn builder<V: TokenValidator>(validator: Arc<V>) -> GrpcServerBuilder<V> {
         let (reporter, health_service) = health_reporter();
@@ -130,83 +116,160 @@ impl GrpcServer {
             routes: Routes::new(health_service),
             health: reporter,
             served: Vec::new(),
+            labels: MethodLabelIndex::new(),
+            telemetry: TelemetrySource::ServerOwned(None, OnceLock::new()),
+            on_call: None,
+            handle_signals: true,
+            shutdown_grace: DEFAULT_SHUTDOWN_GRACE,
         }
     }
 }
 
-/// Configures and runs a server; created by [`GrpcServer::builder`].
+/// Automatic telemetry reads the environment on first meter access or when
+/// serving. If export is unavailable, call tracking still runs with a no-op meter.
+///
+/// The server flushes its own provider after draining or a transport failure.
+/// Dropping the serve future closes connections but can interrupt that flush.
 pub struct GrpcServerBuilder<V> {
     validator: Arc<V>,
     timeout: Option<Duration>,
     routes: Routes,
     health: HealthReporter,
     served: Vec<&'static str>,
+    labels: MethodLabelIndex,
+    telemetry: TelemetrySource,
+    on_call: Option<CallCompletionObserver>,
+    handle_signals: bool,
+    shutdown_grace: Duration,
+}
+
+enum TelemetrySource {
+    ServerOwned(Option<TelemetryConfig>, OnceLock<Telemetry>),
+    CallerOwned(Telemetry),
+    Off,
 }
 
 impl<V: TokenValidator> GrpcServerBuilder<V> {
-    /// Fails any RPC that takes longer than `timeout` to produce a response.
-    ///
-    /// The handler is dropped at the deadline and the client gets
-    /// `Cancelled`. A shorter client `grpc-timeout` still wins. Default: none.
+    /// The server never shuts caller-owned telemetry down; call
+    /// [`Telemetry::shutdown`] after all users have finished. See [`Self::meter`].
+    #[must_use = "this consumes the builder and returns an updated one; the telemetry selection is lost if the result is dropped"]
+    pub fn with_caller_owned_telemetry(mut self, telemetry: &Telemetry) -> Self {
+        self.telemetry = TelemetrySource::CallerOwned(telemetry.clone());
+        self
+    }
+
+    /// Overrides [`TelemetryConfig::from_env`] for server-owned telemetry.
+    #[must_use = "this consumes the builder and returns an updated one; the telemetry config is lost if the result is dropped"]
+    pub fn telemetry_config(mut self, config: TelemetryConfig) -> Self {
+        self.telemetry = TelemetrySource::ServerOwned(Some(config), OnceLock::new());
+        self
+    }
+
+    /// Removes the telemetry layer, including call observation. The last
+    /// telemetry selection wins.
+    #[must_use = "this consumes the builder and returns an updated one; the telemetry opt-out is lost if the result is dropped"]
+    pub fn without_telemetry(mut self) -> Self {
+        self.telemetry = TelemetrySource::Off;
+        self
+    }
+
+    /// Works without a Tokio runtime; no-op if metrics are disabled. Existing
+    /// instruments stay on their original meter when the selection changes.
+    #[must_use = "use the returned meter to create instruments"]
+    pub fn meter(&self) -> Meter {
+        self.telemetry
+            .resolve()
+            .map_or_else(Telemetry::noop_meter, Telemetry::meter)
+    }
+
+    /// Runs once per call, including cancellation, after metrics are recorded
+    /// (even with a no-op meter) unless [`Self::without_telemetry`] is set. Keep
+    /// it non-blocking; panics are caught and logged without changing the outcome.
+    #[must_use = "this consumes the builder and returns an updated one; the call observer is lost if the result is dropped"]
+    pub fn on_call_complete(mut self, f: impl Fn(&CallSummary) + Send + Sync + 'static) -> Self {
+        self.on_call = Some(Arc::new(f));
+        self
+    }
+
+    /// The handler is dropped at the deadline and the client gets `Cancelled`.
+    /// A shorter client `grpc-timeout` still wins. Default: none.
     #[must_use = "this consumes the builder and returns an updated one; the timeout is lost if the result is dropped"]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 
-    /// Adds a service behind the gate and reports it through health:
-    /// `.add_service(FooServer::new, MyFoo)`.
-    ///
-    /// # Compile errors
-    ///
     /// `T: ServicePolicy<S>` is unsatisfied if `T`'s `impl` block lacks
     /// [`#[access_controlled_service]`](crate::access_controlled_service), or
-    /// if `constructor` belongs to a different service than that block.
+    /// if `constructor` belongs to a different service. `S` also needs the wire
+    /// method metadata emitted by `build_support`; regenerate older server code.
     #[must_use = "this consumes the builder and returns an updated one; the service is lost if the result is dropped"]
     pub fn add_service<T, S>(mut self, constructor: impl FnOnce(T) -> S, implementation: T) -> Self
     where
         T: ServicePolicy<S>,
-        S: GrpcService,
+        S: GrpcService + WireMethods,
     {
+        let table = PolicyTable::of::<S, T>();
         let gate = AuthGate::new(
             constructor(implementation),
-            PolicyTable::of::<S, T>(),
+            table,
             Arc::clone(&self.validator),
         );
         self.routes = self.routes.add_service(gate);
         self.served.push(S::NAME);
+        self.labels.register(S::NAME, S::WIRE_METHODS, table);
         self
     }
 
-    /// Serves on `addr` until the server fails.
-    ///
-    /// The success type is [`Infallible`], so `serve(addr).await?` needs no
-    /// further handling and `let Err(err) = serve(addr).await;` is
-    /// exhaustive.
+    /// Drain limit (default: 30 seconds), counted from when health becomes
+    /// `NotServing`; zero closes connections immediately. Remaining RPCs are
+    /// dropped at expiry, which is not an error. The server-owned telemetry
+    /// flush can take up to five more seconds.
+    #[must_use = "this consumes the builder and returns an updated one; the shutdown grace is lost if the result is dropped"]
+    pub fn shutdown_grace(mut self, grace: Duration) -> Self {
+        self.shutdown_grace = grace;
+        self
+    }
+
+    /// Only affects [`Self::serve`], which then runs until it fails or its
+    /// future is dropped.
+    #[must_use = "this consumes the builder and returns an updated one; the signal opt-out is lost if the result is dropped"]
+    pub fn without_signal_handling(mut self) -> Self {
+        self.handle_signals = false;
+        self
+    }
+
+    /// Serves on `addr`, draining on SIGTERM or SIGINT (Unix) or Ctrl-C
+    /// (Windows). Handlers are registered before binding; see [`shutdown_signal`]
+    /// for the process-wide effects, and [`Self::without_signal_handling`] to opt out.
     ///
     /// # Errors
     ///
-    /// [`ServeError::Bind`] if `addr` cannot be bound (for example, the port
-    /// is in use); [`ServeError::Transport`] if the transport fails.
-    pub async fn serve(self, addr: SocketAddr) -> Result<Infallible, ServeError> {
-        match self.serve_with_shutdown(addr, pending()).await {
-            // `pending()` never completes, so the server cannot return `Ok`.
-            Ok(()) => unreachable!("the shutdown future passed to `serve` never completes"),
-            Err(err) => Err(err),
+    /// [`ServeError::Signal`] if handlers cannot be registered,
+    /// [`ServeError::Bind`] if `addr` cannot be bound, [`ServeError::Transport`]
+    /// if the transport fails.
+    ///
+    /// # Panics
+    ///
+    /// Requires a Tokio runtime with I/O enabled (`enable_all()` is sufficient).
+    pub async fn serve(self, addr: SocketAddr) -> Result<(), ServeError> {
+        if self.handle_signals {
+            let signal = shutdown::register().map_err(ServeError::Signal)?;
+            self.serve_with_shutdown(addr, signal).await
+        } else {
+            self.serve_with_shutdown(addr, pending()).await
         }
     }
 
-    /// Serves on `addr` until `shutdown` completes (for example
-    /// `tokio::signal::ctrl_c()` or a cancellation token's `cancelled()`),
-    /// then drains gracefully.
-    ///
-    /// Health flips to `NotServing` before the drain, so load balancers stop
-    /// sending traffic while in-flight RPCs finish. Open streams, including
-    /// health `Watch`, delay completion.
+    /// Only `shutdown` triggers the drain; no process handlers are registered
+    /// (see [`shutdown_signal`]). Health flips to `NotServing` first so load
+    /// balancers stop sending traffic. Open streams, including health `Watch`,
+    /// are closed if they outlast [`Self::shutdown_grace`].
     ///
     /// # Errors
     ///
-    /// As for [`serve`](Self::serve). A completed shutdown returns `Ok(())`.
+    /// [`ServeError::Bind`] or [`ServeError::Transport`]; a completed shutdown
+    /// returns `Ok(())`.
     pub async fn serve_with_shutdown(
         self,
         addr: SocketAddr,
@@ -219,13 +282,7 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
     }
 
     /// [`serve_with_shutdown`](Self::serve_with_shutdown) on a listener you
-    /// already bound. In tests, bind port `0` and read `local_addr()` first.
-    ///
-    /// # Errors
-    ///
-    /// [`ServeError::Transport`] if the transport fails; there is no bind
-    /// step, so never [`ServeError::Bind`]. A completed shutdown returns
-    /// `Ok(())`.
+    /// already bound (in tests, bind port `0`). Never returns [`ServeError::Bind`].
     pub async fn serve_on_listener(
         self,
         listener: TcpListener,
@@ -246,42 +303,111 @@ impl<V: TokenValidator> GrpcServerBuilder<V> {
             routes,
             health,
             served,
+            labels,
+            telemetry,
+            on_call,
+            shutdown_grace,
             ..
         } = self;
+        let call_telemetry = telemetry.resolve();
+        let (call_drain, call_drain_guard) = tokio::sync::watch::channel(());
+        let call_layer = call_telemetry
+            .map(move |telemetry| CallLayer::new(telemetry, labels, on_call, call_drain_guard));
 
         set_status(&health, &served, ServingStatus::Serving).await;
+        let mut probe_guard = call_telemetry.and_then(Telemetry::attach_runtime_probe);
         // Flip health before the graceful drain begins so probes see
         // `NotServing` while in-flight RPCs finish.
+        let (start_grace, grace_started) = oneshot::channel();
+        let probe_guard_on_shutdown = &mut probe_guard;
         let signal = async move {
             shutdown.await;
+            drop(probe_guard_on_shutdown.take());
             set_status(&health, &served, ServingStatus::NotServing).await;
+            let _ = start_grace.send(());
         };
 
         let mut server = Server::builder();
         if let Some(timeout) = timeout {
             server = server.timeout(timeout);
         }
-        // Layers wrap every service, so the trace layer goes first to be
-        // outermost, and layers must be applied before `add_routes`. The gate
-        // sits inside it, so rejections are traced too. Health is not behind
-        // a gate but is still traced.
-        let router = server.layer(GrpcTraceLayer::new()).add_routes(routes);
+        // Both layers wrap routing, so they see gate rejections, unknown paths,
+        // and ungated health. Either requires matching response body types.
+        let layer = match call_layer {
+            Some(call_layer) => Either::Left(
+                ServiceBuilder::new()
+                    .map_response(|response: Response<_>| response.map(Body::new))
+                    .layer(call_layer)
+                    .into_inner(),
+            ),
+            None => Either::Right(MapResponseLayer::new(|response: Response<_>| {
+                response.map(Body::new)
+            })),
+        };
+        let router = server
+            .layer(layer)
+            .layer(GrpcTraceLayer::new())
+            .add_routes(routes);
 
-        router
-            .serve_with_incoming_shutdown(incoming.with_nodelay(Some(true)), signal)
-            .await?;
-        Ok(())
+        let connections = connections::Connections::default();
+        let result = {
+            let serve = router.serve_with_incoming_shutdown(connections.incoming(incoming), signal);
+            tokio::pin!(serve);
+            tokio::select! {
+                biased;
+                result = &mut serve => result,
+                () = async {
+                    if grace_started.await.is_ok() {
+                        sleep(shutdown_grace).await;
+                    } else {
+                        pending::<()>().await;
+                    }
+                } => {
+                    tracing::warn!(grace = ?shutdown_grace, "shutdown grace expired; closing remaining connections");
+                    connections.close();
+                    // Keep tonic's join for its connection tasks. Dropping
+                    // the serve future by itself would leave them running.
+                    serve.await
+                }
+            }
+        };
+        drop(connections);
+        // A transport error can bypass the signal's probe cleanup.
+        drop(probe_guard);
+        // Hyper can run HTTP/2 streams on separate tasks. Before flushing,
+        // let those tasks release their services/bodies and record cancellation.
+        call_drain.closed().await;
+        let server_owned_telemetry = match telemetry {
+            TelemetrySource::ServerOwned(_, cached) => cached.into_inner(),
+            _ => None,
+        };
+        if let Some(telemetry) = server_owned_telemetry {
+            telemetry.shutdown().await;
+        }
+        result
     }
 }
 
-/// Why a server failed to start or stopped abnormally.
-///
-/// `#[non_exhaustive]`: match with a wildcard arm.
+impl TelemetrySource {
+    fn resolve(&self) -> Option<&Telemetry> {
+        match self {
+            Self::ServerOwned(config, cached) => Some(cached.get_or_init(|| {
+                Telemetry::start(config.clone().unwrap_or_else(TelemetryConfig::from_env))
+            })),
+            Self::CallerOwned(telemetry) => Some(telemetry),
+            Self::Off => None,
+        }
+    }
+}
+
+/// Only [`GrpcServerBuilder::serve`] can return [`Self::Signal`].
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ServeError {
     /// The listen address could not be bound.
     Bind(io::Error),
+    /// The shutdown signal handlers could not be registered.
+    Signal(io::Error),
     /// The transport failed while serving.
     Transport(TransportError),
 }
@@ -289,7 +415,7 @@ pub enum ServeError {
 impl Error for ServeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Bind(source) => Some(source),
+            Self::Bind(source) | Self::Signal(source) => Some(source),
             Self::Transport(source) => Some(source),
         }
     }
@@ -305,6 +431,12 @@ impl fmt::Display for ServeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Bind(source) => write!(f, "failed to bind the listen address: {source}"),
+            Self::Signal(source) => {
+                write!(
+                    f,
+                    "failed to register the shutdown signal handlers: {source}"
+                )
+            }
             Self::Transport(source) => write!(f, "gRPC transport error: {source}"),
         }
     }

@@ -25,6 +25,8 @@
 //!   `#[derive(rust_grpc_lib::prost::Message)]`.
 //! - [`async_trait`] is tonic's re-export of the `async-trait` attribute, so
 //!   service impls use `#[rust_grpc_lib::async_trait]`.
+//! - With `server`, `rust_grpc_lib::telemetry::opentelemetry` re-exports the
+//!   OpenTelemetry API, so consumers do not need a direct dependency on it.
 //! - With `test-util`, `testing` also provides health-check helpers and
 //!   `StreamExt` to read their stream, so tests need no `tonic-health` or
 //!   `futures-util`.
@@ -41,10 +43,14 @@
 //! | Feature | Enable it when | Adds |
 //! |---|---|---|
 //! | *(none)* | You call services | [`auth`] client types, [`pool`], [`GrpcClient`] (generates `public` and `authenticated` constructors), the [`tonic`], [`prost`] and [`async_trait`] re-exports |
-//! | `server` | You serve services | `server`, the [`auth`] contexts and policy types, [`access_controlled_service`], [`roles`], [`any_authenticated`], [`public`] |
+//! | `server` | You serve services | `server`, `telemetry`, the [`auth`] contexts and policy types, [`access_controlled_service`], [`roles`], [`any_authenticated`], [`public`] |
 //! | `jwks-url` | Tokens are validated against a JWKS URL | `KeyValidatorConfig::from_jwks_url` |
 //! | `build` | Your `build.rs` generates the bundled protos (`[build-dependencies]`) | `build_support` |
-//! | `test-util` | Tests need tokens, contexts, health queries or live-server checks (`[dev-dependencies]` only); implies `server` | `testing`, `RequestContext::for_test`, `PublicContext::for_test` |
+//! | `test-util` | Tests need tokens, contexts, health queries, metrics or live-server checks (`[dev-dependencies]` only); implies `server` | `testing`, `RequestContext::for_test`, `PublicContext::for_test` |
+//!
+//! The `server` feature builds OpenTelemetry, reqwest and rustls for OTLP/HTTP
+//! metrics even when no collector is configured. Client-only builds do not
+//! pull in this telemetry stack.
 //!
 //! `test-util` ships a publicly known RSA key pair: never enable it in a
 //! production build.
@@ -65,11 +71,13 @@
 //!   contexts, access policies and how they are enforced.
 //! - [`pool`]: the shared channel pool and its keep-alive settings.
 //! - `server` (`server`): `GrpcServer::builder`, the gate, health and per-RPC
-//!   tracing spans.
+//!   tracing spans, signal handling and bounded graceful shutdown.
+//! - `telemetry` (`server`): per-RPC and runtime metrics, OTLP/HTTP configuration,
+//!   explicit provider ownership and the OpenTelemetry API re-export.
 //! - `build_support` (`build`): `generate_protos` and `Config` for `build.rs`.
 //! - `testing` (`test-util`): claims, contexts, tokens, conformance checks,
 //!   health queries (with `testing::StreamExt` to read `health_watch`) and
-//!   span capture.
+//!   span capture, in-memory metrics and an isolated server harness.
 //!
 //! # Getting started
 //!
@@ -83,10 +91,11 @@
 // - Server-only dependencies are optional behind `server` so client-only
 //   builds skip them; the client half is small and `server` needs most of it,
 //   so it is always compiled.
-// - `server`, `trace` (private), `testing` and `build_support` are gated with
-//   `any(feature = "..", test)` so unit tests build without features;
-//   `Cargo.toml` repeats their optional dependencies under
-//   `[dev-dependencies]`. `http-body` there is only for `trace`'s unit tests.
+// - `server`, `telemetry`, `trace` (private), `testing` and `build_support`
+//   are gated with `any(feature = "..", test)` so unit tests build without
+//   features; `Cargo.toml` repeats their optional dependencies under
+//   `[dev-dependencies]`, including OpenTelemetry and `http-body` (`trace`
+//   tests use body frames, which tonic does not re-export).
 // - Crate docs link only to items present in every feature combination.
 //   Feature-gated items are plain code spans: a link would break without the
 //   feature. The macro re-exports add a `doc` arm to their gate to stay
@@ -109,6 +118,8 @@ pub mod build_support;
 pub mod pool;
 #[cfg(any(feature = "server", test))]
 pub mod server;
+#[cfg(any(feature = "server", test))]
+pub mod telemetry;
 #[cfg(any(feature = "test-util", test))]
 pub mod testing;
 #[cfg(any(feature = "server", test))]
@@ -135,4 +146,11 @@ pub mod __private {
     pub use ::prost;
     pub use ::tonic;
     pub use ::tonic_prost;
+
+    /// Exact wire method names routed by a generated server.
+    #[doc(hidden)]
+    pub trait WireMethods {
+        /// Canonical `package.Service/Method` paths, without the leading slash.
+        const WIRE_METHODS: &'static [&'static str];
+    }
 }

@@ -14,11 +14,12 @@ flowchart LR
         code["Your code"] --> client["Generated client<br/>pooled channel + interceptor<br/>adds authorization: Bearer token"]
     end
     subgraph server["Serving side (GrpcServer)"]
-        trace["Trace layer<br/>opens the rpc span<br/>inserts RpcSpan, RpcMethod"] --> gate{"Gate<br/>policy lookup, token,<br/>realm roles"}
+        metrics["Metrics layer<br/>tracks RPCs"] --> trace["Trace layer<br/>opens the rpc span<br/>inserts RpcSpan, RpcMethod"]
+        trace --> gate{"Gate<br/>policy lookup, token,<br/>realm roles"}
         gate -- admitted --> foo["FooServer<br/>(generated)"] --> handler["Your handler<br/>receives a context"]
         gate -- rejected --> status["Unauthenticated or<br/>PermissionDenied"]
     end
-    client -- network --> trace
+    client -- network --> metrics
 ```
 
 The gate strips the `authorization` header on every path, so neither a handler nor a rejection ever sees the token.
@@ -30,7 +31,7 @@ The gate strips the `authorization` header on every path, so neither a handler n
 **Who enforces what.** Servers get the tools to be secure: per-method access policies, enforced by the gate that `GrpcServer::add_service` installs. Clients get the tools to call the servers they need: `GrpcClient`'s `public` constructor sends no token, and `authenticated` attaches one. The target method's policy decides which to use, and the server's gate is the authority: a gated method called without a valid token answers `Unauthenticated`.
 
 - **Client.** Every generated client takes a channel from the process-wide **channel pool** (one lazily connected HTTP/2 channel per normalized endpoint). `public(url)` uses it as is; `authenticated(url, provider)` adds a `ClientJwtInterceptor`, which asks the **token provider** for a token on every request. See the [client guide](client.md).
-- **Server.** `GrpcServer::builder(validator)` installs the **trace layer** (outermost, on every call including health and rejections) and wraps each service added with `add_service` in a **gate**. The gate is the only place access is enforced. See the [server guide](server.md).
+- **Server.** Each call passes through the **metrics layer** (outermost), then **tracing**, then the registered service's **access gate** and generated server. Health bypasses the gate but still gets metrics and tracing. Keeping metrics outside the gate includes rejected and unknown calls; removing telemetry leaves tracing and access enforcement intact. See [Telemetry](server.md#telemetry).
 - **Policies.** `#[access_controlled_service]` on your `impl` declares one policy per method and emits the **policy table** the gate reads. The macro checks nothing itself. `add_service` only accepts annotated implementations, so a service cannot be served without a table, and auth cannot be switched off.
 - **Contexts.** Handlers receive a `RequestContext<T>` (validated claims plus message) or, for `#[public]` methods, a `PublicContext<T>` (message only), never a raw `tonic::Request`. Both dereference (read-only) to `CallInfo` (method, peer, metadata, span).
 - **Forwarding.** Inside a handler, `ctx.token()`, `ctx.forward(msg)` or `ctx.into_forwarded()` passes the caller's token to a downstream service, which validates it again. See [Forwarding the caller's token](client.md#forwarding-the-callers-token).

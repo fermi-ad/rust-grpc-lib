@@ -431,6 +431,12 @@ pub mod example_db_server {
     }
     /// Generated gRPC service name
     pub const SERVICE_NAME: &str = "services.example.ExampleDB";
+    impl<T> ::rust_grpc_lib::__private::WireMethods for ExampleDbServer<T> {
+        const WIRE_METHODS: &'static [&'static str] = &[
+            "services.example.ExampleDB/getEndPointOne",
+            "services.example.ExampleDB/getEndPointTwo",
+        ];
+    }
     impl<T> ::rust_grpc_lib::__private::tonic::server::NamedService for ExampleDbServer<T> {
         const NAME: &'static str = SERVICE_NAME;
     }

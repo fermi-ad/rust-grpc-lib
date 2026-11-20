@@ -1,10 +1,4 @@
-//! Tests for [`super::qualify_tonic_paths`] and
-//! [`super::rewrite_generated_files`].
-//!
-//! Covers: each tonic-build path shape that must be rewritten, every shape that
-//! must be left alone (identifier boundaries, qualified paths, comments),
-//! idempotence, and the file-level behavior (line endings, missing files,
-//! untouched neighbors).
+//! Tests for [`super::qualify_tonic_paths`] and [`super::rewrite_generated_files`].
 
 use std::{env, fs, path::PathBuf, process};
 
@@ -15,10 +9,6 @@ const QUALIFIED: &str = "::rust_grpc_lib::__private::tonic::";
 fn rewrite(line: &str) -> String {
     qualify_tonic_paths(line).into_owned()
 }
-
-// -----------------------------------------------------------------------
-// qualify_tonic_paths: rewritten
-// -----------------------------------------------------------------------
 
 #[test]
 fn rewrites_a_path_at_the_start_of_a_line() {
@@ -96,10 +86,6 @@ fn keeps_the_line_ending() {
     assert_eq!(rewrite("tonic::A\n"), format!("{QUALIFIED}A\n"));
     assert_eq!(rewrite("tonic::A\r\n"), format!("{QUALIFIED}A\r\n"));
 }
-
-// -----------------------------------------------------------------------
-// qualify_tonic_paths: left alone
-// -----------------------------------------------------------------------
 
 #[test]
 fn leaves_tonic_prost_alone() {
@@ -182,10 +168,6 @@ fn returns_a_borrowed_line_when_nothing_changes() {
     assert!(matches!(qualify_tonic_paths("tonic::X"), Cow::Owned(_)));
 }
 
-// -----------------------------------------------------------------------
-// qualify_tonic_paths: mixed lines and idempotence
-// -----------------------------------------------------------------------
-
 #[test]
 fn rewrites_only_the_paths_on_a_mixed_line() {
     assert_eq!(
@@ -211,10 +193,6 @@ fn is_idempotent() {
         assert_eq!(rewrite(&once), once, "not idempotent for {line:?}");
     }
 }
-
-// -----------------------------------------------------------------------
-// rewrite_generated_files
-// -----------------------------------------------------------------------
 
 // A scratch directory unique to one test.
 struct Scratch(PathBuf);
@@ -272,11 +250,103 @@ fn rewrites_the_files_of_the_given_packages() {
             "use {QUALIFIED}codegen::*;\n// tonic::Doc\nlet c = tonic_prost::ProstCodec::default();\n"
         )
     );
-    // CRLF endings and a missing final newline survive.
     assert_eq!(
         dir.read("services.example.rs"),
         format!("x: {QUALIFIED}Status\r\ny: {QUALIFIED}Code")
     );
+}
+
+#[test]
+fn emits_wire_methods_from_server_arms_only_and_is_idempotent() {
+    let dir = Scratch::new("wire-methods");
+    let source = r#"pub mod example_db_client {
+    let path = http::uri::PathAndQuery::from_static("/pkg.ExampleDB/GetURL");
+    "/pkg.ExampleDB/ClientOnly" => {
+}
+// pub mod decoy_server {
+pub mod example_db_server {
+    // "/pkg.ExampleDB/CommentOnly" => {
+    /// "/pkg.ExampleDB/DocOnly" => {
+                "/pkg.ExampleDB/GetURL" => {
+                "/pkg.ExampleDB/readValue" => {
+    impl<T> tonic::server::NamedService for ExampleDbServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+"#;
+    let expected = r#"    impl<T> ::rust_grpc_lib::__private::WireMethods for ExampleDbServer<T> {
+        const WIRE_METHODS: &'static [&'static str] = &[
+            "pkg.ExampleDB/GetURL",
+            "pkg.ExampleDB/readValue",
+        ];
+    }
+"#;
+    let anchor = "    impl<T> tonic::server::NamedService for ExampleDbServer<T> {";
+    let qualified_anchor =
+        format!("    impl<T> {QUALIFIED}server::NamedService for ExampleDbServer<T> {{");
+    dir.write("pkg.rs", source);
+    let packages = ["pkg".to_string()];
+
+    rewrite_generated_files(&dir.0, &packages).expect("rewrite succeeds");
+    let once = dir.read("pkg.rs");
+    assert_eq!(
+        once,
+        source.replace(anchor, &format!("{expected}{qualified_anchor}"))
+    );
+
+    rewrite_generated_files(&dir.0, &packages).expect("second rewrite succeeds");
+    assert_eq!(dir.read("pkg.rs"), once);
+}
+
+#[test]
+fn keeps_methods_separate_and_preserves_crlf_in_an_escaped_package() {
+    let dir = Scratch::new("wire-methods-crlf");
+    let source = concat!(
+        "pub mod first_server {\n",
+        "                \"/demo.self.First/FirstRPC\" => {\n",
+        "    impl<T> tonic::server::NamedService for FirstServer<T> {\n",
+        "    }\n",
+        "}\n",
+        "pub mod unrelated {\n",
+        "                \"/demo.self.Empty/NotRouted\" => {\n",
+        "}\n",
+        "pub mod empty_server {\n",
+        "    impl<T> tonic::server::NamedService for EmptyServer<T> {\n",
+        "    }\n",
+        "}\n",
+    );
+    let expected = [
+        "pub mod first_server {",
+        "                \"/demo.self.First/FirstRPC\" => {",
+        "    impl<T> ::rust_grpc_lib::__private::WireMethods for FirstServer<T> {",
+        "        const WIRE_METHODS: &'static [&'static str] = &[",
+        "            \"demo.self.First/FirstRPC\",",
+        "        ];",
+        "    }",
+        &format!("    impl<T> {QUALIFIED}server::NamedService for FirstServer<T> {{"),
+        "    }",
+        "}",
+        "pub mod unrelated {",
+        "                \"/demo.self.Empty/NotRouted\" => {",
+        "}",
+        "pub mod empty_server {",
+        "    impl<T> ::rust_grpc_lib::__private::WireMethods for EmptyServer<T> {",
+        "        const WIRE_METHODS: &'static [&'static str] = &[];",
+        "    }",
+        &format!("    impl<T> {QUALIFIED}server::NamedService for EmptyServer<T> {{"),
+        "    }",
+        "}",
+        "",
+    ]
+    .join("\r\n");
+    dir.write("demo.self_.rs", &source.replace('\n', "\r\n"));
+    let packages = ["demo.self".to_string()];
+
+    rewrite_generated_files(&dir.0, &packages).expect("rewrite succeeds");
+    assert_eq!(dir.read("demo.self_.rs"), expected);
+
+    rewrite_generated_files(&dir.0, &packages).expect("second rewrite succeeds");
+    assert_eq!(dir.read("demo.self_.rs"), expected);
 }
 
 #[test]

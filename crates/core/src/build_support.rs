@@ -73,8 +73,13 @@ mod tests;
 /// prefix. After compiling, this function therefore rewrites each path-start
 /// `tonic::` in the generated `<package>.rs` files to
 /// `::rust_grpc_lib::__private::tonic::`; the `prost` and `ProstCodec` paths
-/// are configured to point there directly. The rewrite is lexical and touches
-/// only paths that begin with `tonic::`.
+/// are configured to point there directly. The tonic path rewrite is lexical
+/// and changes only paths that begin with `tonic::`.
+///
+/// Each generated server also implements the hidden `WireMethods` trait. Its
+/// `WIRE_METHODS` slice contains the exact routed `package.Service/Method`
+/// names without leading slashes. Clients do not receive this metadata, and
+/// compiling generated code does not require the `server` feature.
 ///
 /// # Environment
 ///

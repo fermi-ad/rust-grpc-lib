@@ -9,7 +9,8 @@ API docs: <https://fermi-ad.github.io/rust-grpc-lib/rust_grpc_lib/index.html>
 - **Per-method access policies:** `#[roles(..)]`, `#[any_authenticated]` or `#[public]` on every method, with no switch to turn auth off. See [Writing an access-controlled service](docs/server.md#writing-an-access-controlled-service).
 - **Bundled protos:** every controls proto is generated from your `build.rs`, and no system `protoc` is needed. Protos come only from [interface-definitions](https://github.com/fermi-ad/interface-definitions), so the whole org shares one set of types; for a new RPC, change it there and run the bump workflow yourself. See [Generating the protos](docs/server.md#generating-the-protos).
 - **Clients:** every generated client gets `public(endpoint)`, which sends no token, and `authenticated(endpoint, provider)`, which attaches a Bearer token to every request; both use lazy connections on pooled HTTP/2 channels. The target method's policy decides which to use, and the server's gate is the authority. TLS is handled by the infra team, so do not configure tonic's TLS settings. See [Generated clients](docs/client.md#generated-clients).
-- **Server builder:** an open health service (built in; no `tonic-health` dependency), timeouts, graceful shutdown and per-RPC spans. See [Building and serving](docs/server.md#building-and-serving) and [Tracing and logs](docs/server.md#tracing-and-logs).
+- **Server builder:** built-in open health checks, RPC timeouts, signal-driven [graceful shutdown](docs/server.md#graceful-shutdown) and [per-RPC spans](docs/server.md#tracing-and-logs).
+- **Server metrics:** RPC latency, active requests and Tokio scheduling delay with [OTLP/HTTP export](docs/server.md#telemetry) when configured. Use [in-memory metrics](docs/testing.md#metrics) in tests.
 - **Minimal dependencies:** `tonic`, `prost` and the `async_trait` attribute are re-exported (`rust_grpc_lib::tonic`, `rust_grpc_lib::prost`, `#[rust_grpc_lib::async_trait]`), so you do not add them yourself. See [Adding the dependency](docs/server.md#adding-the-dependency).
 - **Test helpers:** token minting, handler request builders, health queries, live-server conformance checks and span capture. See [Testing](docs/testing.md).
 
@@ -50,7 +51,7 @@ Or start from the [service template](https://github.com/fermi-ad/rust-grpc-servi
 | Guide | Covers |
 |---|---|
 | [Concepts](docs/concepts.md) | How the pieces fit, and a glossary. Start here if you are new to tonic, JWTs or Keycloak |
-| [Server](docs/server.md) | Dependencies, proto generation, policies, contexts, status codes, the builder, environment variables, tracing |
+| [Server](docs/server.md) | Dependencies, proto generation, policies, contexts, status codes, serving, shutdown, telemetry and tracing |
 | [Client](docs/client.md) | Generated clients (`public` and `authenticated`), token providers, token forwarding, the channel pool, environment variables |
 | [Testing](docs/testing.md) | Handler unit tests, live-server tests, health checks, conformance checks, span capture |
 | [Troubleshooting](docs/troubleshooting.md) | Macro compile errors, build and setup problems, runtime surprises |
