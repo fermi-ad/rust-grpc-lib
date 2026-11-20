@@ -74,7 +74,9 @@ The complete list is under "Compile errors" in the `access_controlled_service` r
 | `RequestContext` needs a message type argument | Write `RequestContext<MyRequest>` |
 | a `RequestContext` parameter must be a plain binding | Bind it as `ctx` or `mut ctx`, not a pattern |
 | method `getuser` collides with `get_user` | Rename one; the gate ignores case and `_` |
+| method `ping` collides with `ping`, with a note about `#[cfg]` | The macro runs before `#[cfg]` is evaluated, so it sees every `cfg` variant of a method even if only one is compiled in. Write one `impl` block per variant, put `#[cfg(..)]` on each block above `#[access_controlled_service]`, and give each variant its own policy |
 | `#[roles]` / `#[public]` / `#[any_authenticated]` has no effect here | Put it on a method inside an annotated `impl` block, or remove it |
+| `attempting to skip non-existent parameter` from `#[tracing::instrument(skip(ctx))]` | The macro turns the context into a local variable in the body and renames the parameter, so `ctx` is not a parameter when `instrument` runs. Use `#[tracing::instrument(skip_all)]` and record the fields you want |
 | unknown argument; the only argument is `server = <path>` | Use `#[access_controlled_service(server = path::to::FooServer)]` or no argument |
 | `E0277`: `X` has no access policy for the generated server `FooServer<X>` (at `add_service`) | Annotate the `impl`, or make `server = ..` match the constructor passed to `add_service` |
 | `E0425`: cannot find type `RequestContext` in this scope | Import it from `rust_grpc_lib::auth`, and enable the `server` feature |
