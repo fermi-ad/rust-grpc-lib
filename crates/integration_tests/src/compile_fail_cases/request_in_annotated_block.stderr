@@ -1,0 +1,5 @@
+error: the request parameter must be `RequestContext<T>`, not a plain `tonic::Request<T>`; the context carries the method and the span, and the claims for authenticated methods
+  --> src/compile_fail_cases/request_in_annotated_block.rs:19:35
+   |
+19 |     async fn echo(&self, request: Request<String>) -> Result<Response<String>, Status> {
+   |                                   ^^^^^^^^^^^^^^^
