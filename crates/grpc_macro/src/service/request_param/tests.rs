@@ -94,6 +94,24 @@ fn a_public_context_on_an_authenticated_method_is_rejected() {
 }
 
 #[test]
+fn a_by_reference_or_subpattern_binding_is_rejected() {
+    // `ctx @ _` is a binding with a subpattern; `ref ctx` binds by reference.
+    // Neither can be re-bound by the prologue's `let`.
+    for sig in [
+        signature(parse_quote! {
+            async fn echo(&self, ref ctx: RequestContext<String>) {}
+        }),
+        signature(parse_quote! {
+            async fn echo(&self, ctx @ _: RequestContext<String>) {}
+        }),
+    ] {
+        let message = error_message(sig, false);
+
+        assert!(message.contains("must be a plain binding"), "{message}");
+    }
+}
+
+#[test]
 fn a_method_without_a_request_parameter_is_rejected() {
     let sig = signature(parse_quote! {
         async fn echo(&self) {}

@@ -83,9 +83,31 @@ fn each_policy_renders_its_access_value() {
 
 #[test]
 fn a_path_qualified_attribute_is_recognized() {
-    let (result, _) = extract(vec![parse_quote!(#[rust_grpc_lib::any_authenticated])]);
+    for attr in [
+        parse_quote!(#[rust_grpc_lib::any_authenticated]),
+        parse_quote!(#[::rust_grpc_lib::any_authenticated]),
+    ] {
+        let (result, remaining) = extract(vec![attr]);
 
-    assert!(matches!(result.unwrap(), Some(Policy::AnyAuthenticated)));
+        assert!(matches!(result.unwrap(), Some(Policy::AnyAuthenticated)));
+        assert_eq!(remaining.len(), 0);
+    }
+}
+
+#[test]
+fn another_crates_attribute_with_a_policy_name_is_left_alone() {
+    for attr in [
+        parse_quote!(#[other::public]),
+        parse_quote!(#[other::roles(any("a"))]),
+        parse_quote!(#[other::any_authenticated]),
+        parse_quote!(#[rust_grpc_lib::inner::public]),
+        parse_quote!(#[::public]),
+    ] {
+        let (result, remaining) = extract(vec![attr]);
+
+        assert!(result.unwrap().is_none());
+        assert_eq!(remaining.len(), 1);
+    }
 }
 
 #[test]

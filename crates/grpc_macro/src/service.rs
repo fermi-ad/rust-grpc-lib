@@ -16,20 +16,24 @@
 //!
 //! Errors raised here (`compile_fail_cases/`): not a trait `impl`; generic
 //! arguments on `server = ..` or, when it is absent, on the trait path; no
-//! policy (`missing_policy`); a normalized-name collision
-//! (`colliding_method_names`). Argument, path and block errors abort at once;
+//! policy (`missing_policy`); a macro invocation among the items; a
+//! normalized-name collision (`colliding_method_names`). Argument, path and
+//! block errors abort at once;
 //! after that each method reports its first error, all methods' errors are
 //! combined, and the collision check runs only if every method succeeded.
 //!
 //! Security invariants:
 //! - Every `fn` has exactly one policy; a missing one is an error, never a
-//!   default, and only `#[public]` yields `Access::Public`.
+//!   default, and only `#[public]` yields `Access::Public`. A macro
+//!   invocation in the block is an error too, since it could hide a handler.
 //! - The table is built from exactly the stripped attributes and is bound to
 //!   the generated server type, which `add_service` requires
 //!   (`server_builder_unannotated_service`).
 //! - Handlers cannot forge or bypass their context; see [`request_param`].
 //! - Normalized names are unique: the gate takes the first match, so a
-//!   collision would give one method another's policy.
+//!   collision would give one method another's policy. `#[cfg]` is not
+//!   evaluated here, so `cfg`-gated variants of one method collide as well;
+//!   the error says how to restructure.
 
 use std::collections::HashMap;
 
@@ -70,6 +74,9 @@ pub(crate) fn expand(attr: TokenStream2, item: TokenStream2) -> syn::Result<Toke
 struct TableEntry {
     name: Ident,
     policy: Policy,
+    /// Has a `#[cfg]` or `#[cfg_attr]`, which this macro runs too early to
+    /// evaluate; only used to explain a collision.
+    cfg_gated: bool,
 }
 
 /// `explicit` if given, else the trait path with `Foo` renamed to tonic's
@@ -110,19 +117,32 @@ fn without_generics(path: &Path) -> syn::Result<Path> {
     Ok(path)
 }
 
-/// Processes every `fn` item (other items carry no policy), combining errors.
+/// Processes every `fn` item, combining errors. Associated types and consts
+/// carry no policy and pass through. Macro invocations are rejected: they may
+/// expand to a handler the macro cannot see, which would get no table row and
+/// keep its raw `Request<T>`.
 fn expand_methods(impl_block: &mut ItemImpl) -> syn::Result<Vec<TableEntry>> {
     let mut entries = Vec::new();
     let mut errors = Vec::new();
     for item in &mut impl_block.items {
-        if let ImplItem::Fn(method) = item {
-            match process_method(method) {
+        match item {
+            ImplItem::Fn(method) => match process_method(method) {
                 Ok(entry) => entries.push(entry),
                 Err(err) => errors.push(err),
-            }
+            },
+            ImplItem::Macro(_) | ImplItem::Verbatim(_) => errors.push(opaque_item(item)),
+            _ => {}
         }
     }
     combine_all(errors).map(|()| entries)
+}
+
+fn opaque_item(item: &ImplItem) -> Error {
+    Error::new_spanned(
+        item,
+        "this item may define a method that `#[access_controlled_service]` cannot see, so it \
+         would get no access policy; write the method out in the block",
+    )
 }
 
 /// Rewrites one method in place and returns its row. Stops at the first error,
@@ -140,6 +160,10 @@ fn process_method(method: &mut ImplItemFn) -> syn::Result<TableEntry> {
     Ok(TableEntry {
         name: method.sig.ident.clone(),
         policy,
+        cfg_gated: method
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr")),
     })
 }
 
@@ -168,20 +192,32 @@ fn normalize(name: &str) -> String {
 
 /// Errors on each method whose normalized name equals an earlier one's.
 fn check_collisions(entries: &[TableEntry]) -> syn::Result<()> {
-    let mut seen: HashMap<String, &Ident> = HashMap::new();
+    let mut seen: HashMap<String, &TableEntry> = HashMap::new();
     combine_all(entries.iter().filter_map(|entry| {
-        let first = seen.insert(normalize(&entry.name.to_string()), &entry.name)?;
+        let first = seen.insert(normalize(&entry.name.to_string()), entry)?;
+        let hint = if entry.cfg_gated || first.cfg_gated {
+            CFG_HINT
+        } else {
+            ""
+        };
         Some(Error::new_spanned(
             &entry.name,
             format!(
-                "method `{}` collides with `{first}`: the access gate matches methods by \
-                 their lowercase name without underscores, so it could not tell their \
-                 policies apart",
-                entry.name
+                "method `{}` collides with `{}`: the access gate matches methods by their \
+                 lowercase name without underscores, so it could not tell their policies \
+                 apart{hint}",
+                entry.name, first.name
             ),
         ))
     }))
 }
+
+/// Appended when a collision involves a `#[cfg]`-gated method, the one case
+/// where the colliding methods might never be compiled in together.
+const CFG_HINT: &str = "\nnote: `#[cfg]` on a method is not evaluated before this macro runs, so \
+     it sees every variant even if only one is compiled in; to choose a variant by `cfg`, \
+     write one `impl` block per variant and put `#[cfg(..)]` on each block, above \
+     `#[access_controlled_service]`";
 
 /// `POLICIES` lists methods in declaration order under their Rust name minus
 /// `r#`, not normalized: the gate normalizes at lookup and the plain name

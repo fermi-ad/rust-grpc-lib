@@ -10,9 +10,10 @@
 //!   `GrpcServer::add_service` enforces.
 //!
 //! The consuming crate must depend on `rust-grpc-lib` under that name (no
-//! `package = ".."` rename): the emitted code names only `::rust_grpc_lib`,
-//! which re-exports the tonic it needs, so no direct `tonic` dependency is
-//! required.
+//! `package = ".."` rename) with `features = ["server"]`: the emitted code
+//! names only `::rust_grpc_lib`, whose server items exist only under that
+//! feature, and which re-exports the tonic it needs, so no direct `tonic`
+//! dependency is required.
 //!
 //! The [service template](https://github.com/fermi-ad/rust-grpc-service-template)
 //! is a runnable example service; `docs/server.md` and `docs/client.md` cover
@@ -121,6 +122,12 @@ pub fn public(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// or `PublicContext<T>` (`public`), matched by its last path segment and
 /// bound to a plain name such as `ctx` or `mut ctx`.
 ///
+/// The context is a local variable in the body, not a parameter of the
+/// method: the macro renames the parameter, so `#[tracing::instrument]` sees
+/// the raw request under a hidden name. `#[instrument(skip(ctx))]` is
+/// therefore an error (`attempting to skip non-existent parameter`); use
+/// `#[instrument(skip_all)]` and record the fields you want.
+///
 /// ```rust
 /// # use std::marker::PhantomData;
 /// # use grpc_macro::access_controlled_service;
@@ -197,6 +204,8 @@ pub fn public(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   is absent (the trait path is not checked when `server` is given).
 /// - The attribute placed below `#[async_trait]`.
 /// - A method with no policy, or with more than one.
+/// - A macro invocation among the block's items: it could generate a handler
+///   the macro cannot see, which would get no policy. Write handlers out.
 /// - `#[roles]` not of the form `roles(any(..))` or `roles(all(..))`: another
 ///   mode, an empty role list, trailing tokens, or a role that is neither a
 ///   string literal nor a path.
@@ -208,9 +217,17 @@ pub fn public(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///   `#[public]` method.
 /// - A context bound to anything but a plain name (destructuring, `ref`, `@`).
 /// - Two methods whose names are equal ignoring case, `_` and `r#`: the gate
-///   could not tell them apart.
+///   could not tell them apart. This includes `#[cfg]`-gated variants of one
+///   method, since `cfg` is not evaluated before this macro runs; write one
+///   `impl` block per variant, with `#[cfg(..)]` on each block above this
+///   attribute.
 ///
 /// Errors from different methods are reported together.
+///
+/// When the block has any error, the macro emits only the errors and not the
+/// `impl`, so the type no longer implements its trait. Later errors about
+/// that (such as `E0277` where the service is mounted) are follow-ups: fix
+/// the errors reported above them first.
 #[proc_macro_attribute]
 pub fn access_controlled_service(attr: TokenStream, item: TokenStream) -> TokenStream {
     into_token_stream(service::expand(attr.into(), item.into()))

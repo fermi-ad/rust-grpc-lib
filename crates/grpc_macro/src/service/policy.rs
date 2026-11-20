@@ -5,8 +5,9 @@
 //! [`Kind::unstripped_error`], so one left outside an annotated block is an
 //! error, not ignored (`policy_outside_service`, `public_outside_service`).
 //! Stripping them here prevents that inside the block and makes the table
-//! exactly the declared policies. They are matched by last path segment, so
-//! `#[rust_grpc_lib::public]` counts.
+//! exactly the declared policies. They are matched by their bare name or as
+//! `rust_grpc_lib::<name>`, so `#[rust_grpc_lib::public]` counts but another
+//! crate's `#[other::public]` is left for that crate's macro.
 //!
 //! Errors: a second policy (`duplicate_policy`), a malformed `#[roles]`
 //! (plus [`roles`](super::roles) errors), arguments on a bare attribute.
@@ -54,11 +55,21 @@ impl Kind {
         Self::ALL.map(Self::usage).join(" or ")
     }
 
+    /// Matches `name` and `rust_grpc_lib::name` (with or without a leading
+    /// `::`), not other paths that merely end in `name`.
     fn of(attr: &Attribute) -> Option<Self> {
-        let segment = attr.path().segments.last()?;
-        Self::ALL
-            .into_iter()
-            .find(|kind| segment.ident == kind.name())
+        let path = attr.path();
+        Self::ALL.into_iter().find(|kind| {
+            let name = kind.name();
+            let mut segments = path.segments.iter();
+            match (segments.next(), segments.next(), segments.next()) {
+                (Some(only), None, _) => path.leading_colon.is_none() && only.ident == name,
+                (Some(krate), Some(last), None) => {
+                    krate.ident == "rust_grpc_lib" && last.ident == name
+                }
+                _ => false,
+            }
+        })
     }
 
     fn name(self) -> &'static str {
