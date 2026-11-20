@@ -158,15 +158,15 @@ async fn records_health_calls() {
     let error = health_status(channel, "example.unregistered.Service").await.unwrap_err();
     assert_eq!(error.code(), Code::NotFound);
     // This status excludes the harness's successful startup checks.
-    assert_eq!(server.metrics().calls("grpc.health.v1.Health/Check", Code::NotFound).await, 1);
+    assert_eq!(server.metrics().wait_for_call_count("grpc.health.v1.Health/Check", Code::NotFound).await, 1);
     server.shutdown().await;
 }
 ```
 
 `shutdown().await` asserts the server drains within the harness timeout (five seconds by default, configurable with `.shutdown_timeout(duration)`) and then shuts down its metrics with a separate flush budget. Drop any open streams first. Dropping the harness instead aborts the server without waiting.
 
-For an existing server fixture, create `InMemory::new()` and inject `.telemetry(&metrics.telemetry())`. It uses a real SDK meter without a collector or runtime probe. The fixture owns the provider: after serving ends, call `metrics.telemetry().shutdown().await`. Snapshots remain readable after shutdown.
+For an existing server fixture, create `InMemoryMetrics::new()` and inject `.with_caller_owned_telemetry(&metrics.telemetry())`. It uses a real SDK meter without a collector or runtime probe. The fixture owns the provider: after serving ends, call `metrics.telemetry().shutdown().await`. Snapshots remain readable after shutdown.
 
 - `histograms(name)` returns `HistogramSnapshot` points with unit, attributes, count, sum, min, max, bounds and bucket counts (including overflow).
 - `counters(name)` returns `CounterSnapshot` points with attributes and cumulative value, including points for up-down counters. Snapshot attributes are rendered as strings, even when exported values are numeric.
-- `calls(method, code).await` waits up to five seconds for a nonzero cumulative count for the exact metric label (or `_OTHER`) and status. A read immediately after a client response can race with the server task; cancellation is tracked only once the server notices the drop. To check a specific count or other condition, use `wait_until(|metrics| ..., timeout).await`. Both poll and panic with recorded series on timeout. Account for startup health checks when asserting exact counts.
+- `wait_for_call_count(method, code).await` waits up to five seconds for a nonzero cumulative count for the exact metric label (or `_OTHER`) and status. A read immediately after a client response can race with the server task; cancellation is tracked only once the server notices the drop. To check a specific count or other condition, use `wait_until(|metrics| ..., timeout).await`. Both poll and panic with recorded series on timeout. Account for startup health checks when asserting exact counts.

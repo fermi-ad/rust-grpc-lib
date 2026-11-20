@@ -187,7 +187,7 @@ With `server`, the metrics layer runs outside tracing and access control. It tra
 
 - Without an endpoint, with `OTEL_SDK_DISABLED=true`, or on exporter setup failure, the layer uses a no-op meter. There is no exporter or runtime probe, but call tracking and any observer still run. Setup failure is logged.
 - `.without_telemetry()` removes the layer and observer entirely and makes `meter()` return a no-op meter. Tracing, health and access control are unchanged.
-- `.telemetry_config(config)`, `.telemetry(&telemetry)` and `.without_telemetry()` are mutually exclusive: the last selection wins. Select before creating instruments with `meter()`; existing instruments do not move to a replacement provider.
+- `.telemetry_config(config)`, `.with_caller_owned_telemetry(&telemetry)` and `.without_telemetry()` are mutually exclusive: the last selection wins. Select before creating instruments with `meter()`; existing instruments do not move to a replacement provider.
 - Config setters win over environment settings. `.endpoint(url)` takes the full metrics URL (empty clears it); `.sdk_disabled(false)` can override the environment opt-out. Service name precedence is `.service_name(name)`, `OTEL_SERVICE_NAME`, `service.name` in `OTEL_RESOURCE_ATTRIBUTES`, then `unknown_service:<executable file name>` (or `unknown_service`). An empty explicit name resets to that fallback. `.service_version(version)` overrides the resource version; no version is inferred from the crate.
 
 ### Built-in metrics
@@ -202,23 +202,23 @@ Completion uses the `grpc-status` header or trailer. Dropping an unfinished resp
 
 The metric `rpc.method` is the exact wire label without a leading slash (for example, `services.example.ExampleDB/getEndPointOne`). Labels come from registered method metadata and policies, with fixed labels for health `Check` and `Watch`. Unknown or noncanonical paths, including wrong casing, use `_OTHER`; callers cannot add labels. On the `rpc` trace span, `rpc.method` is the method segment alone and `rpc.service` is separate. The numeric status and tonic `error.type` name differ from OpenTelemetry v1.37's string conventions.
 
-Duration histograms use `telemetry::DEFAULT_DURATION_BUCKETS`: 36 bounds from 10 µs to 7 s, including 15 ms and 50 ms. Override them with `GRPC_DURATION_BUCKETS` or `TelemetryConfig::duration_buckets`. Bounds must be nonempty, finite, positive and strictly increasing; invalid lists warn and fall back to the defaults.
+Duration histograms use `telemetry::DEFAULT_DURATION_BUCKET_BOUNDS_SECONDS`: 36 bounds from 10 µs to 7 s, including 15 ms and 50 ms. Override them with `GRPC_DURATION_BUCKETS` or `TelemetryConfig::duration_bucket_bounds_seconds`. Bounds must be nonempty, finite, positive and strictly increasing; invalid lists warn and fall back to the defaults.
 
 ### Runtime scheduling delay
 
-An active provider runs one runtime probe while serving. Servers sharing telemetry share the probe on the first server's runtime. It stops when the last server starts shutdown or stops serving, or when the provider shuts down. Set `GRPC_RUNTIME_PROBE=false` or call `TelemetryConfig::runtime_probe(false)` to disable it. On a multi-threaded runtime it samples whichever worker runs it: it detects broad starvation, not a single blocked worker.
+An active provider runs one runtime probe while serving. Servers sharing telemetry share the probe on the first server's runtime. It stops when the last server starts shutdown or stops serving, or when the provider shuts down. Set `GRPC_RUNTIME_PROBE=false` or call `TelemetryConfig::runtime_scheduling_probe(false)` to disable it. On a multi-threaded runtime it samples whichever worker runs it: it detects broad starvation, not a single blocked worker.
 
 ### Application metrics and call observation
 
-Use `builder.meter()` before serving or `Telemetry::meter()` to create instruments. The API is re-exported as `rust_grpc_lib::telemetry::opentelemetry`. `Telemetry::duration_histogram(name, description)` applies the configured seconds buckets; `duration_histogram_with(name, description, bounds)` sets them for one instrument (invalid bounds warn and use `DEFAULT_DURATION_BUCKETS`). Use your application's own namespace, record durations in seconds, and choose attribute values from closed sets. Leave the service name out of instrument names: `service.name` already identifies it.
+Use `builder.meter()` before serving or `Telemetry::meter()` to create instruments. The API is re-exported as `rust_grpc_lib::telemetry::opentelemetry`. `Telemetry::duration_histogram(name, description)` applies the configured seconds buckets. Use your application's own namespace, record durations in seconds, and choose attribute values from closed sets. Leave the service name out of instrument names: `service.name` already identifies it.
 
-`.on_call(|summary| ...)` observes each completion, including cancellation, after the built-in measurements. `CallSummary` contains `method` (`Option<&'static str>`, with `None` for `_OTHER`), `status` (`tonic::Code`) and `duration` (`Duration`). It runs on the serving path, so keep it cheap and non-blocking. Panics are caught and logged without changing the RPC result.
+`.on_call_complete(|summary| ...)` observes each completion, including cancellation, after the built-in measurements. `CallSummary` contains `method` (`Option<&'static str>`, with `None` for `_OTHER`), `status` (`tonic::Code`) and `duration` (`Duration`). It runs on the serving path, so keep it cheap and non-blocking. Panics are caught and logged without changing the RPC result.
 
 ### Provider ownership
 
 The library does not install a global meter provider. The serve methods flush and stop a server-owned provider after drain, including forced closure, or after a transport failure. Cleanup runs on a separate thread; the server waits up to five seconds. Failure or timeout is logged, not returned as `ServeError`; cleanup continues in the background after a timeout.
 
-With `.telemetry(&telemetry)`, the builder clones the handle and does **not** flush or shut down the provider. Call `telemetry.shutdown().await` after all users finish, on a Tokio runtime with time enabled. Only the first shutdown call across clones waits. Dropping the last handle is best-effort cleanup, not an awaited flush.
+With `.with_caller_owned_telemetry(&telemetry)`, the builder clones the handle and does **not** flush or shut down the provider. Call `telemetry.shutdown().await` after all users finish, on a Tokio runtime with time enabled. Only the first shutdown call across clones waits. Dropping the last handle is best-effort cleanup, not an awaited flush.
 
 This health-only example records a custom counter and flushes caller-owned telemetry even if serving returns an error:
 
@@ -232,9 +232,9 @@ use rust_grpc_lib::{
 
 async fn serve<V: TokenValidator>(validator: Arc<V>, addr: SocketAddr) -> Result<(), ServeError> {
     let telemetry = Telemetry::start(TelemetryConfig::from_env().service_name("example"));
-    let builder = GrpcServer::builder(validator).telemetry(&telemetry);
+    let builder = GrpcServer::builder(validator).with_caller_owned_telemetry(&telemetry);
     let calls = builder.meter().u64_counter("example.rpc.finished").build();
-    let result = builder.on_call(move |_| calls.add(1, &[])).serve(addr).await;
+    let result = builder.on_call_complete(move |_| calls.add(1, &[])).serve(addr).await;
     telemetry.shutdown().await;
     result
 }
