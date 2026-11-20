@@ -77,10 +77,11 @@ pub fn grpc_client_derive(input: TokenStream) -> TokenStream {
 /// takes a `RequestContext<T>`. See [`access_controlled_service`] for an
 /// example and the errors a malformed list raises.
 ///
-/// Policy attributes are valid only on a method inside an
-/// [`access_controlled_service`] block, which strips them (so they need no
-/// import there). Anywhere else they are a compile error, so a policy is
-/// never silently ignored.
+/// This applies to all three policy attributes ([`roles`],
+/// [`any_authenticated`] and [`public`]): each is valid only on a method
+/// inside an [`access_controlled_service`] block, which strips it (so it
+/// needs no import there). Anywhere else it is a compile error, so a policy
+/// is never silently ignored.
 #[proc_macro_attribute]
 pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
     unstripped(PolicyKind::Roles, item)
@@ -88,8 +89,9 @@ pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Access policy: any caller with a valid token; no role is needed.
 ///
-/// The method takes a `RequestContext<T>`. Takes no arguments; placement rules
-/// as for [`roles`].
+/// Takes no arguments, and is valid only on a method inside an
+/// [`access_controlled_service`] block. The method takes a
+/// `RequestContext<T>`.
 #[proc_macro_attribute]
 pub fn any_authenticated(_attr: TokenStream, item: TokenStream) -> TokenStream {
     unstripped(PolicyKind::AnyAuthenticated, item)
@@ -97,10 +99,12 @@ pub fn any_authenticated(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Access policy: open to everyone, with or without a token.
 ///
-/// The only way to make a method reachable without a token, and easy to grep
-/// for. The method takes a `PublicContext<T>`, which carries the message and
-/// call information but no claims or token, even if the caller sent one.
-/// Takes no arguments; placement rules as for [`roles`].
+/// The only way to make a method reachable without a token. The method takes
+/// a `PublicContext<T>`, which carries the message and call information but
+/// no claims or token, even if the caller sent one.
+///
+/// Takes no arguments, and is valid only on a method inside an
+/// [`access_controlled_service`] block.
 #[proc_macro_attribute]
 pub fn public(_attr: TokenStream, item: TokenStream) -> TokenStream {
     unstripped(PolicyKind::Public, item)

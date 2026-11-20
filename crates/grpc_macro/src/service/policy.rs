@@ -134,7 +134,7 @@ pub(super) fn extract_policy(attrs: &mut Vec<Attribute>) -> syn::Result<Option<P
         return Err(Error::new_spanned(
             &second,
             format!(
-                "a method declares exactly one access policy: {}",
+                "a method must declare exactly one access policy: {}",
                 Kind::alternatives()
             ),
         ));

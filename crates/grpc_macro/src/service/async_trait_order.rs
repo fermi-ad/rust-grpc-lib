@@ -23,8 +23,8 @@ pub(super) fn check_async_trait_order(sig: &Signature) -> syn::Result<()> {
     if rewritten {
         return Err(Error::new_spanned(
             &sig.ident,
-            "`#[access_controlled_service]` must be placed above `#[async_trait]`; \
-             `#[async_trait]` has already rewritten this method",
+            "`#[access_controlled_service]` must be placed above `#[async_trait]`, \
+             `otherwise #[async_trait]` rewrites this method first",
         ));
     }
     Ok(())

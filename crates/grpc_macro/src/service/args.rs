@@ -16,7 +16,7 @@ pub(super) fn parse_server_arg(attr: TokenStream2) -> syn::Result<Option<Path>> 
     meta::parser(|meta| {
         if !meta.path.is_ident("server") {
             return Err(meta.error(format!(
-                "unknown argument `{}`; the only argument is `server = <path>`",
+                "unknown argument `{}`; the only accepted argument is `server = <path>`",
                 meta.path.to_token_stream()
             )));
         }
