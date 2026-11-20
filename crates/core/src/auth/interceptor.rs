@@ -1,42 +1,45 @@
-//! [`ClientJwtInterceptor`] — outbound tonic interceptor that attaches a JWT
-//! `Authorization: Bearer` header to every request by calling a [`TokenProvider`].
-//!
-//! This is the only type defined in this module. It is used internally by the
-//! `from_endpoint_with_provider` constructor that `#[derive(GrpcClient)]`
-//! generates on every client struct; consumers do not construct it directly.
+//! [`ClientJwtInterceptor`]: attaches a JWT to every outgoing request.
 
 use rust_auth_lib::TokenProvider;
-use tonic::{Request, Status, service::Interceptor};
+use tonic::{
+    Request, Status,
+    metadata::{Ascii, MetadataValue, errors::InvalidMetadataValue},
+    service::{Interceptor, interceptor::InterceptedService},
+    transport::Channel,
+};
 
-/// Generic interceptor that calls any [`TokenProvider`] and attaches the result
-/// as a `Bearer` token on every outbound gRPC request.
+#[cfg(test)]
+mod tests;
+
+/// The transport of a client built with `authenticated`: a
+/// pooled [`Channel`] behind a [`ClientJwtInterceptor`]. Name it to store
+/// such a client, e.g. `ExampleDbClient<AuthenticatedClient<ForwardedToken>>`.
+pub type AuthenticatedClient<P> = InterceptedService<Channel, ClientJwtInterceptor<P>>;
+
+/// A tonic [`Interceptor`] that sends a [`TokenProvider`]'s token as a
+/// sensitive `authorization: Bearer <token>` header on every call.
 ///
-/// Used internally by the `from_endpoint_with_provider` constructor that
-/// `#[derive(GrpcClient)]` generates on every client struct; consumers do not
-/// typically construct this directly.
+/// Generated clients install it through `authenticated`. To
+/// forward a caller's token, pass `RequestContext::token` as the provider.
 ///
-/// To forward the caller's token from an incoming request to a downstream
-/// service, use [`crate::auth::extract_token`] to obtain a [`rust_auth_lib::ForwardedToken`]
-/// and pass it as the provider:
+/// # Errors
 ///
-/// ```rust,ignore
-/// #[rust_grpc_lib::keycloak_authenticated_service]
-/// impl Daq for MyDaqService {
-///     async fn get_data(&self, req: Request<GetDataRequest>) -> Result<Response<GetDataResponse>, Status> {
-///         let provider = rust_grpc_lib::auth::extract_token(&req)?;
-///         let client = AlarmCommandsClient::from_endpoint_with_provider(
-///             "http://alarm-host:50051",
-///             provider,
-///         )?;
-///         // ...
-///     }
-/// }
-/// ```
+/// Fails the call with `Unauthenticated` if the provider errors, and with
+/// `Internal` if the token is not a valid header value.
 pub struct ClientJwtInterceptor<P: TokenProvider> {
     provider: P,
 }
 
 impl<P: TokenProvider> ClientJwtInterceptor<P> {
+    /// Create an interceptor that asks `provider` for a token on every call.
+    ///
+    /// ```rust
+    /// use rust_grpc_lib::auth::{ClientJwtInterceptor, ForwardedToken};
+    /// use rust_grpc_lib::tonic::service::Interceptor;
+    /// let mut interceptor = ClientJwtInterceptor::new(ForwardedToken::new("my-token"));
+    /// let request = interceptor.call(rust_grpc_lib::tonic::Request::new(())).unwrap();
+    /// assert_eq!(request.metadata().get("authorization").unwrap(), "Bearer my-token");
+    /// ```
     pub fn new(provider: P) -> Self {
         Self { provider }
     }
@@ -48,13 +51,19 @@ impl<P: TokenProvider> Interceptor for ClientJwtInterceptor<P> {
             .provider
             .get_token()
             .map_err(|e| Status::unauthenticated(e.to_string()))?;
+        let value = bearer_header(&token).map_err(|e| {
+            Status::internal(format!("token contains invalid header characters: {e}"))
+        })?;
 
-        req.metadata_mut().insert(
-            "authorization",
-            format!("Bearer {token}").parse().map_err(|e| {
-                Status::internal(format!("token contains invalid header characters: {e}"))
-            })?,
-        );
+        req.metadata_mut().insert("authorization", value);
         Ok(req)
     }
+}
+
+// The `authorization` value for `token`, marked sensitive so `Debug` hides
+// it. Shared by the interceptor and `RequestContext::forward`.
+pub(crate) fn bearer_header(token: &str) -> Result<MetadataValue<Ascii>, InvalidMetadataValue> {
+    let mut value: MetadataValue<Ascii> = format!("Bearer {token}").parse()?;
+    value.set_sensitive(true);
+    Ok(value)
 }
