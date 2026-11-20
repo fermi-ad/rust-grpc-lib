@@ -1,15 +1,15 @@
-error: cannot construct `RequestContext<_>` with struct literal syntax due to private fields
+error: cannot construct `AuthenticatedContext<_>` with struct literal syntax due to private fields
   --> src/compile_fail_cases/auth_internals_forged.rs:8:5
    |
- 8 |     RequestContext {
-   |     ^^^^^^^^^^^^^^
+ 8 |     AuthenticatedContext {
+   |     ^^^^^^^^^^^^^^^^^^^^
    |
    = note: ...and other private fields `token` and `info` that were not provided
 help: you might have meant to use the `for_test` associated function
    |
- 8 -     RequestContext {
+ 8 -     AuthenticatedContext {
  9 -         claims,
 10 -         message: (),
 11 -     }
- 8 +     RequestContext::for_test(_, _)
+ 8 +     AuthenticatedContext::for_test(_, _)
    |

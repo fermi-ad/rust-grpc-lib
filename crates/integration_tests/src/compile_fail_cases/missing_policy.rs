@@ -25,15 +25,15 @@ struct Server;
 #[access_controlled_service]
 impl Echo for Server {
     #[roles(any("admin"))]
-    async fn echo(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn echo(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 
-    async fn shout(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn shout(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 
-    async fn whisper(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn whisper(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 }

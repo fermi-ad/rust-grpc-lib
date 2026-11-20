@@ -6,7 +6,7 @@ Enable them with `rust-grpc-lib` plus the `test-util` feature in `[dev-dependenc
 
 | To test | Use | Gate involved |
 |---|---|---|
-| Handler logic | [`authenticated_request`, `public_request`, `RequestContext::for_test`](#unit-test-a-handler) | No |
+| Handler logic | [`authenticated_request`, `public_request`, `AuthenticatedContext::for_test`](#unit-test-a-handler) | No |
 | Access policy and the real wire path | [`TestServer`, `test_token`](#test-a-service-end-to-end) | Yes |
 | Every method enforces its policy | [`assert_policy_table_conforms`](#check-policies-conformance) | Yes |
 | Health | [`health_status`, `health_watch`](#check-health) | n/a |
@@ -31,7 +31,7 @@ let reply = MyService.my_public_method(public_request(Empty {})).await.unwrap().
 
 - A plain `Request::new`, or `public_request` passed to an authenticated handler, fails with `Internal "authentication is not configured"`.
 - `claims_with_roles(sub, roles)` covers the common case; `KeycloakClaimsBuilder` builds custom claims (expiry, issuer, client roles).
-- For logic that takes a context rather than a request, build one with `RequestContext::for_test(claims, msg)` or `PublicContext::for_test(msg)`. The context reports method `test.Service/Test` and token `test-token`. Contexts are read-only; chain `with_rpc(RpcMethod)`, `with_remote_addr(addr)`, `with_metadata(map)` or `with_extension(value)` to simulate more call details.
+- For logic that takes a context rather than a request, build one with `AuthenticatedContext::for_test(claims, msg)` or `PublicContext::for_test(msg)`. The context reports method `test.Service/Test` and token `test-token`. Contexts are read-only; chain `with_rpc(RpcMethod)`, `with_remote_addr(addr)`, `with_metadata(map)` or `with_extension(value)` to simulate more call details.
 
 ## Test a service end to end
 

@@ -10,7 +10,7 @@
 //! entry fails the comparison.
 
 use rust_grpc_lib::access_controlled_service;
-use rust_grpc_lib::auth::{Access, PolicyTable, PublicContext, RequestContext};
+use rust_grpc_lib::auth::{Access, AuthenticatedContext, PolicyTable, PublicContext};
 use rust_grpc_lib::tonic::{Request, Response, Status};
 
 #[allow(dead_code)]
@@ -31,17 +31,23 @@ struct SpellingServerStandIn<T>(#[allow(dead_code)] T);
 #[access_controlled_service(server = SpellingServerStandIn)]
 impl Spelling for SpellingImpl {
     #[roles(any("type-role"))]
-    async fn r#type(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn r#type(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 
     #[roles(all("bpm-role"))]
-    async fn get_bpm_list(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn get_bpm_list(
+        &self,
+        ctx: AuthenticatedContext<String>,
+    ) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 
     #[roles(any("v2-role"))]
-    async fn get_v2_data(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn get_v2_data(
+        &self,
+        ctx: AuthenticatedContext<String>,
+    ) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 
@@ -51,7 +57,7 @@ impl Spelling for SpellingImpl {
     }
 
     #[any_authenticated]
-    async fn read_io(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn read_io(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 }

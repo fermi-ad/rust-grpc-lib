@@ -16,7 +16,7 @@ mod tests;
 ///
 /// It has no claims or token, even if the caller sent one: the gate does not
 /// read it and strips the header. To know the caller, use
-/// `#[any_authenticated]` and [`RequestContext`](super::RequestContext).
+/// `#[any_authenticated]` and [`AuthenticatedContext`](super::AuthenticatedContext).
 #[derive(Debug)]
 pub struct PublicContext<T> {
     /// The request message (or request stream).

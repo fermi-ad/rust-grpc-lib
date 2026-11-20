@@ -20,7 +20,7 @@ pub type AuthenticatedClient<P> = InterceptedService<Channel, ClientJwtIntercept
 /// sensitive `authorization: Bearer <token>` header on every call.
 ///
 /// Generated clients install it through `authenticated`. To
-/// forward a caller's token, pass `RequestContext::token` as the provider.
+/// forward a caller's token, pass `AuthenticatedContext::token` as the provider.
 ///
 /// # Errors
 ///
@@ -61,7 +61,7 @@ impl<P: TokenProvider> Interceptor for ClientJwtInterceptor<P> {
 }
 
 // The `authorization` value for `token`, marked sensitive so `Debug` hides
-// it. Shared by the interceptor and `RequestContext::forward`.
+// it. Shared by the interceptor and `AuthenticatedContext::forward`.
 pub(crate) fn bearer_header(token: &str) -> Result<MetadataValue<Ascii>, InvalidMetadataValue> {
     let mut value: MetadataValue<Ascii> = format!("Bearer {token}").parse()?;
     value.set_sensitive(true);

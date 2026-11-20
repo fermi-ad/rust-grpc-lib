@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rust_grpc_lib::access_controlled_service;
-use rust_grpc_lib::auth::{KeyValidator, RequestContext};
+use rust_grpc_lib::auth::{AuthenticatedContext, KeyValidator};
 use rust_grpc_lib::server::{GrpcServer, GrpcServerBuilder};
 use rust_grpc_lib::telemetry::TelemetryConfig;
 use rust_grpc_lib::testing::{
@@ -47,7 +47,7 @@ impl ExampleDb for Stub {
     #[roles(any("operator"))]
     async fn get_end_point_one(
         &self,
-        _ctx: RequestContext<IdList>,
+        _ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyOne>, Status> {
         Ok(Response::new(ReplyOne::default()))
     }
@@ -55,7 +55,7 @@ impl ExampleDb for Stub {
     #[any_authenticated]
     async fn get_end_point_two(
         &self,
-        _ctx: RequestContext<IdList>,
+        _ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyTwo>, Status> {
         self.entered.notify_one();
         pending().await

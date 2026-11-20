@@ -49,7 +49,7 @@ use proto::services::example::{
     example_db_server::{ExampleDb, ExampleDbServer},
 };
 use rust_grpc_lib::access_controlled_service;
-use rust_grpc_lib::auth::{KeyValidator, KeyValidatorConfig, RequestContext};
+use rust_grpc_lib::auth::{KeyValidator, KeyValidatorConfig, AuthenticatedContext};
 use rust_grpc_lib::server::GrpcServer;
 use rust_grpc_lib::tonic::{Response, Status};
 use std::sync::Arc;
@@ -60,13 +60,13 @@ struct ExampleDbService;
 #[rust_grpc_lib::async_trait]
 impl ExampleDb for ExampleDbService {
     #[roles(any("operator", "admin"))]
-    async fn get_end_point_one(&self, ctx: RequestContext<IdList>) -> Result<Response<ReplyOne>, Status> {
+    async fn get_end_point_one(&self, ctx: AuthenticatedContext<IdList>) -> Result<Response<ReplyOne>, Status> {
         tracing::info!(user = ctx.sub(), ids = ctx.message.id.len(), "getEndPointOne");
         Ok(Response::new(ReplyOne::default()))
     }
 
     #[any_authenticated]
-    async fn get_end_point_two(&self, _ctx: RequestContext<IdList>) -> Result<Response<ReplyTwo>, Status> {
+    async fn get_end_point_two(&self, _ctx: AuthenticatedContext<IdList>) -> Result<Response<ReplyTwo>, Status> {
         Ok(Response::new(ReplyTwo::default()))
     }
 }

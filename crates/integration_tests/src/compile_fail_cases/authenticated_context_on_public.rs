@@ -1,4 +1,4 @@
-// A `#[public]` method has no claims to give a `RequestContext`; it takes a
+// A `#[public]` method has no claims to give an `AuthenticatedContext`; it takes a
 // `PublicContext`.
 use rust_grpc_lib::access_controlled_service;
 use rust_grpc_lib::tonic::{Request, Response, Status};
@@ -17,7 +17,7 @@ impl Echo for Server {
     #[public]
     async fn echo(
         &self,
-        ctx: rust_grpc_lib::auth::RequestContext<String>,
+        ctx: rust_grpc_lib::auth::AuthenticatedContext<String>,
     ) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use rust_grpc_lib::access_controlled_service;
 use rust_grpc_lib::auth::{
-    Access, CallInfo, MethodPolicy, PublicContext, RequestContext, RpcMethod, ServicePolicy,
+    Access, AuthenticatedContext, CallInfo, MethodPolicy, PublicContext, RpcMethod, ServicePolicy,
 };
 use rust_grpc_lib::server::GrpcServer;
 use rust_grpc_lib::testing::{
@@ -101,7 +101,7 @@ impl ExampleDb for Gated {
     #[roles(any("operator"))]
     async fn get_end_point_one(
         &self,
-        ctx: RequestContext<IdList>,
+        ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyOne>, Status> {
         self.calls.record(&ctx, format!("{ctx:?}"), Some(ctx.sub()));
         Ok(Response::new(reply_one(ctx.sub())))
@@ -368,7 +368,7 @@ impl ExampleDb for Mislabeled {
     #[any_authenticated]
     async fn get_end_point_one(
         &self,
-        ctx: RequestContext<IdList>,
+        ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyOne>, Status> {
         Ok(Response::new(reply_one(ctx.sub())))
     }
@@ -376,7 +376,7 @@ impl ExampleDb for Mislabeled {
     #[any_authenticated]
     async fn get_end_point_two(
         &self,
-        ctx: RequestContext<IdList>,
+        ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyTwo>, Status> {
         Ok(Response::new(reply_two(ctx.sub())))
     }
@@ -465,7 +465,7 @@ impl ExampleDb for Downstream {
     #[any_authenticated]
     async fn get_end_point_one(
         &self,
-        ctx: RequestContext<IdList>,
+        ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyOne>, Status> {
         Ok(Response::new(reply_one(ctx.sub())))
     }
@@ -473,7 +473,7 @@ impl ExampleDb for Downstream {
     #[any_authenticated]
     async fn get_end_point_two(
         &self,
-        ctx: RequestContext<IdList>,
+        ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyTwo>, Status> {
         Ok(Response::new(reply_two(ctx.sub())))
     }
@@ -492,7 +492,7 @@ impl ExampleDb for Upstream {
     #[any_authenticated]
     async fn get_end_point_one(
         &self,
-        ctx: RequestContext<IdList>,
+        ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyOne>, Status> {
         let mut downstream = ExampleDbClient::authenticated(&self.downstream, ctx.token())
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -502,7 +502,7 @@ impl ExampleDb for Upstream {
     #[any_authenticated]
     async fn get_end_point_two(
         &self,
-        ctx: RequestContext<IdList>,
+        ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyTwo>, Status> {
         let mut downstream = ExampleDbClient::public(&self.downstream)
             .map_err(|e| Status::internal(e.to_string()))?;

@@ -8,7 +8,7 @@ use tokio::net::TcpListener;
 use tokio::time::{sleep, timeout};
 
 use rust_grpc_lib::access_controlled_service;
-use rust_grpc_lib::auth::{KeyValidator, RequestContext};
+use rust_grpc_lib::auth::{AuthenticatedContext, KeyValidator};
 use rust_grpc_lib::server::{GrpcServer, GrpcServerBuilder, ServeError};
 use rust_grpc_lib::testing::{ServingStatus, StreamExt, health_watch};
 use rust_grpc_lib::tonic::{Code, Response, Status};
@@ -29,7 +29,7 @@ impl ExampleDb for Stub {
     #[any_authenticated]
     async fn get_end_point_one(
         &self,
-        _ctx: RequestContext<IdList>,
+        _ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyOne>, Status> {
         Ok(Response::new(ReplyOne {
             section_one: vec![],
@@ -39,7 +39,7 @@ impl ExampleDb for Stub {
     #[any_authenticated]
     async fn get_end_point_two(
         &self,
-        _ctx: RequestContext<IdList>,
+        _ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyTwo>, Status> {
         sleep(Duration::from_secs(30)).await;
         Err(Status::unimplemented("unreachable in the tests"))

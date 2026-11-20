@@ -19,10 +19,10 @@ fn sample() -> TokenStream2 {
     quote! {
         impl Echo for Server {
             #[roles(any("admin", "operator"))]
-            async fn get_end_point_one(&self, ctx: RequestContext<Req>) -> Out { 1 }
+            async fn get_end_point_one(&self, ctx: AuthenticatedContext<Req>) -> Out { 1 }
 
             #[any_authenticated]
-            async fn get_end_point_two(&self, ctx: RequestContext<Req>) -> Out { 2 }
+            async fn get_end_point_two(&self, ctx: AuthenticatedContext<Req>) -> Out { 2 }
 
             #[public]
             async fn ping(&self, ctx: PublicContext<Req>) -> Out { 3 }
@@ -125,8 +125,8 @@ fn every_bad_method_is_reported_in_one_expansion() {
         quote! {},
         quote! {
             impl Echo for Server {
-                async fn a(&self, ctx: RequestContext<Req>) -> Out { 1 }
-                async fn b(&self, ctx: RequestContext<Req>) -> Out { 2 }
+                async fn a(&self, ctx: AuthenticatedContext<Req>) -> Out { 1 }
+                async fn b(&self, ctx: AuthenticatedContext<Req>) -> Out { 2 }
             }
         },
     )

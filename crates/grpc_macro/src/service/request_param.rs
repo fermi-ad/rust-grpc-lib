@@ -1,23 +1,23 @@
-//! Rewrites the first non-`self` parameter, `RequestContext<T>` (`#[roles]`,
+//! Rewrites the first non-`self` parameter, `AuthenticatedContext<T>` (`#[roles]`,
 //! `#[any_authenticated]`) or `PublicContext<T>` (`#[public]`), to the
 //! `::rust_grpc_lib::__private::tonic::Request<T>` the tonic trait expects, and
 //! returns the prologue:
 //!
 //! ```text
-//! let ctx: RequestContext<T> =
-//!     ::rust_grpc_lib::auth::RequestContext::try_from_request(__rust_grpc_lib_request)?;
+//! let ctx: AuthenticatedContext<T> =
+//!     ::rust_grpc_lib::auth::AuthenticatedContext::try_from_request(__rust_grpc_lib_request)?;
 //! ```
 //!
 //! Security:
 //! - `try_from_request` fails closed (`Internal`) unless the call came
 //!   through `add_service`: it needs the `RpcMethod` extension and, for
-//!   `RequestContext`, the verified caller the gate inserts.
+//!   `AuthenticatedContext`, the verified caller the gate inserts.
 //! - The request is bound under a `Span::mixed_site()` name, so the body
 //!   cannot reach the raw request.
 //! - The user's type annotation is kept and must unify with the real context,
 //!   so a lookalike type does not compile.
 //! - The context must match the policy, so a `#[public]` method never gets
-//!   claims (`request_context_on_public`).
+//!   claims (`authenticated_context_on_public`).
 //!
 //! A plain `tonic::Request<T>` is rejected (`request_in_annotated_block`) so
 //! every handler gets the method and span via its context. Contexts match by
@@ -34,11 +34,11 @@ use syn::{
 #[cfg(test)]
 mod tests;
 
-const REQUEST: &str = "RequestContext";
+const REQUEST: &str = "AuthenticatedContext";
 const PUBLIC: &str = "PublicContext";
 
 /// See the module docs. `public` selects `PublicContext` over
-/// `RequestContext`.
+/// `AuthenticatedContext`.
 pub(super) fn rewrite_context_param(sig: &mut Signature, public: bool) -> syn::Result<Stmt> {
     let (expected, other) = if public {
         (PUBLIC, REQUEST)
@@ -52,7 +52,7 @@ pub(super) fn rewrite_context_param(sig: &mut Signature, public: bool) -> syn::R
     }) else {
         return Err(Error::new_spanned(
             &sig.ident,
-            format!("a method of this block takes a `{expected}<T>` request parameter"),
+            format!("a method of this block takes a request parameter of type `{expected}<T>`"),
         ));
     };
 
@@ -66,7 +66,7 @@ pub(super) fn rewrite_context_param(sig: &mut Signature, public: bool) -> syn::R
             return Err(Error::new_spanned(
                 other,
                 format!(
-                    "a `{expected}` parameter must be a plain binding, such as `ctx` or `mut ctx`"
+                    "the `{expected}` parameter must be a plain binding, such as `ctx` or `mut ctx`"
                 ),
             ));
         }
@@ -119,12 +119,12 @@ fn context_message_type(ty: &Type, expected: &str, other: &str) -> syn::Result<T
 
     if name != expected {
         let reason = if expected == PUBLIC {
-            "a `#[public]` method takes `PublicContext<T>`, not `RequestContext<T>`: nobody is \
+            "a `#[public]` method takes `PublicContext<T>`, not `AuthenticatedContext<T>`: nobody is \
              authenticated, so there are no claims to give it"
                 .to_owned()
         } else {
             format!(
-                "a method with a role or authentication policy takes `RequestContext<T>`, not \
+                "a method with a role or authentication policy takes `AuthenticatedContext<T>`, not \
                  `{name}<T>`"
             )
         };

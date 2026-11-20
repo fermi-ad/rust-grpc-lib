@@ -8,12 +8,12 @@ struct Server;
 
 impl Server {
     #[roles(any("admin"))]
-    async fn guarded(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn guarded(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 
     #[any_authenticated]
-    async fn authenticated(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn authenticated(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 }

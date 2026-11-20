@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use rust_grpc_lib::access_controlled_service;
-use rust_grpc_lib::auth::{Access, PolicyTable, PublicContext, RequestContext};
+use rust_grpc_lib::auth::{Access, AuthenticatedContext, PolicyTable, PublicContext};
 use rust_grpc_lib::testing::{authenticated_request, claims_with_roles, public_request};
 use rust_grpc_lib::tonic::body::Body;
 use rust_grpc_lib::tonic::codec::{DecodeBuf, Decoder, Streaming};
@@ -42,7 +42,10 @@ struct EchoServer;
 #[access_controlled_service(server = EchoServerStandIn)]
 impl EchoService for EchoServer {
     #[roles(any("admin", "operator"))]
-    async fn any_role(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn any_role(
+        &self,
+        ctx: AuthenticatedContext<String>,
+    ) -> Result<Response<String>, Status> {
         Ok(Response::new(format!(
             "any: {} by {} at {}",
             ctx.message,
@@ -52,17 +55,23 @@ impl EchoService for EchoServer {
     }
 
     #[roles(all("admin", "operator"))]
-    async fn all_roles(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn all_roles(
+        &self,
+        ctx: AuthenticatedContext<String>,
+    ) -> Result<Response<String>, Status> {
         Ok(Response::new(format!("all: {}", ctx.message)))
     }
 
     #[roles(any(roles::OPERATOR, "viewer"))]
-    async fn typed(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn typed(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 
     #[any_authenticated]
-    async fn signed_in(&self, mut ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn signed_in(
+        &self,
+        mut ctx: AuthenticatedContext<String>,
+    ) -> Result<Response<String>, Status> {
         ctx.message.push('!');
         Ok(Response::new(ctx.message))
     }
@@ -75,7 +84,7 @@ impl EchoService for EchoServer {
     #[roles(all(roles::ADMIN))]
     async fn consume(
         &self,
-        ctx: RequestContext<Streaming<String>>,
+        ctx: AuthenticatedContext<Streaming<String>>,
     ) -> Result<Response<String>, Status> {
         let who = ctx.sub().to_owned();
         let _stream: Streaming<String> = ctx.message;
@@ -184,7 +193,7 @@ impl ArcService for ArcServer {
     #[roles(any("admin"))]
     async fn shared(
         self: Arc<Self>,
-        ctx: RequestContext<String>,
+        ctx: AuthenticatedContext<String>,
     ) -> Result<Response<String>, Status> {
         Ok(Response::new(format!("arc: {}", ctx.message)))
     }
@@ -216,7 +225,10 @@ struct BoxedServerStandIn<T>(PhantomData<T>);
 #[rust_grpc_lib::async_trait]
 impl BoxedService for BoxedServer {
     #[roles(all("admin"))]
-    async fn boxed_ctx(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn boxed_ctx(
+        &self,
+        ctx: AuthenticatedContext<String>,
+    ) -> Result<Response<String>, Status> {
         Ok(Response::new(format!("ctx: {}", ctx.message)))
     }
 
@@ -270,7 +282,7 @@ impl First for Both {
 #[access_controlled_service]
 impl Second for Both {
     #[roles(all("admin"))]
-    async fn same(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn same(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 }
