@@ -1,13 +1,9 @@
-//! `GrpcServer`'s trace layer: opens the `rpc` span per request and holds it
-//! until the response body ends. Fields and target: [`crate::server`];
-//! field names live in [`RpcSpan`].
+//! `GrpcServer`'s trace layer: opens the `rpc` span per request, holds it until
+//! the response body ends, and inserts the [`RpcSpan`] and (if the path parses)
+//! [`RpcMethod`](crate::auth::RpcMethod) extensions.
 //!
-//! Inserts the [`RpcSpan`] and, if the path parses, the
-//! [`RpcMethod`](crate::auth::RpcMethod) request extensions.
-//!
-//! Cancellation: dropping the response future before it yields a response
-//! (client cancel or server timeout) records `grpc.status` as `Cancelled`. A
-//! mid-stream cancel leaves it unset, and the span closes without `stream_ms`.
+//! Dropping the response future before it yields a response records
+//! `grpc.status` as `Cancelled`; a mid-stream cancel leaves it unset.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -26,7 +22,6 @@ mod hooks;
 #[cfg(test)]
 mod tests;
 
-/// Wraps a service in [`GrpcTrace`].
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct GrpcTraceLayer;
 
