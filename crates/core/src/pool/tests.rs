@@ -1,7 +1,7 @@
 //! Tests for [`super::get_or_create_channel`].
 //!
-//! Covers: valid endpoint, invalid URI, same-endpoint channel reuse, distinct
-//! endpoints getting distinct channels, and pool insertion.
+//! Covers: invalid URI, the runtime check, and endpoint key normalization
+//! (which endpoints share an entry and which stay distinct).
 
 use super::*;
 
@@ -9,44 +9,122 @@ fn empty_pool() -> ChannelMap {
     RwLock::new(HashMap::new())
 }
 
-#[tokio::test]
-async fn valid_endpoint_returns_ok() {
+// Number of pool entries after requesting each endpoint in order.
+fn entries_after(endpoints: &[&str]) -> usize {
     let pool = empty_pool();
-    let result = get_or_create_channel("http://localhost:50051", &pool);
-    assert!(result.is_ok());
+    for endpoint in endpoints {
+        get_or_create_channel(endpoint, &pool).unwrap();
+    }
+    pool.read().unwrap().len()
 }
 
 #[tokio::test]
-async fn invalid_endpoint_returns_err() {
-    let pool = empty_pool();
-    // An empty string is not a valid URI.
-    let result = get_or_create_channel("", &pool);
-    assert!(result.is_err());
+async fn trailing_slash_on_pathless_url_shares_entry() {
+    assert_eq!(entries_after(&["http://h:50051", "http://h:50051/"]), 1);
+    assert_eq!(entries_after(&["http://h:50051/", "http://h:50051"]), 1);
 }
 
 #[tokio::test]
-async fn same_endpoint_reuses_channel() {
-    let pool = empty_pool();
-    let _ = get_or_create_channel("http://localhost:50051", &pool).unwrap();
-    let _ = get_or_create_channel("http://localhost:50051", &pool).unwrap();
-    // tonic::transport::Channel doesn't expose pointer equality directly,
-    // but we can assert the pool only has one entry — proving no second
-    // channel was created.
-    assert_eq!(pool.read().unwrap().len(), 1);
+async fn scheme_and_host_case_share_entry() {
+    assert_eq!(
+        entries_after(&[
+            "http://host:50051",
+            "HTTP://host:50051",
+            "http://HOST:50051",
+            "HTTP://Host:50051/",
+        ]),
+        1
+    );
 }
 
 #[tokio::test]
-async fn different_endpoints_get_different_channels() {
+async fn key_is_lowercased_scheme_and_host_without_lone_slash() {
     let pool = empty_pool();
-    let _ = get_or_create_channel("http://localhost:50051", &pool).unwrap();
-    let _ = get_or_create_channel("http://localhost:50052", &pool).unwrap();
-    assert_eq!(pool.read().unwrap().len(), 2);
+    get_or_create_channel("HTTP://Host.Example:50051/", &pool).unwrap();
+    assert!(
+        pool.read()
+            .unwrap()
+            .contains_key("http://host.example:50051")
+    );
 }
 
 #[tokio::test]
-async fn channel_is_inserted_into_pool() {
+async fn distinct_ports_stay_distinct() {
+    assert_eq!(entries_after(&["http://h:50051", "http://h:50052"]), 2);
+}
+
+#[tokio::test]
+async fn default_port_is_not_stripped() {
+    assert_eq!(entries_after(&["http://h", "http://h:80"]), 2);
+}
+
+#[tokio::test]
+async fn distinct_schemes_stay_distinct() {
+    assert_eq!(entries_after(&["http://h:50051", "https://h:50051"]), 2);
+}
+
+#[tokio::test]
+async fn distinct_paths_stay_distinct() {
+    assert_eq!(
+        entries_after(&[
+            "http://h:50051",
+            "http://h:50051/api",
+            "http://h:50051/api/"
+        ]),
+        3
+    );
+}
+
+#[tokio::test]
+async fn query_stays_distinct() {
+    assert_eq!(
+        entries_after(&[
+            "http://h:50051",
+            "http://h:50051/?a=1",
+            "http://h:50051/?a=2"
+        ]),
+        3
+    );
+}
+
+#[tokio::test]
+async fn userinfo_stays_distinct_and_case_sensitive() {
+    assert_eq!(
+        entries_after(&[
+            "http://h:50051",
+            "http://user@h:50051",
+            "http://User@h:50051",
+            "http://user@H:50051",
+        ]),
+        3
+    );
+}
+
+#[tokio::test]
+async fn invalid_uri_still_errors_after_normalization() {
     let pool = empty_pool();
+    assert!(matches!(
+        get_or_create_channel("http://exa mple:50051", &pool),
+        Err(ChannelError::Transport(_))
+    ));
+    assert!(matches!(
+        get_or_create_channel("", &pool),
+        Err(ChannelError::Transport(_))
+    ));
     assert!(pool.read().unwrap().is_empty());
-    get_or_create_channel("http://localhost:50051", &pool).unwrap();
-    assert!(pool.read().unwrap().contains_key("http://localhost:50051"));
+}
+
+#[test]
+fn outside_runtime_still_errors_even_when_pooled_equivalent_exists() {
+    let pool = empty_pool();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        get_or_create_channel("http://h:50051", &pool).unwrap();
+    });
+    assert!(matches!(
+        get_or_create_channel("http://h:50051/", &pool),
+        Err(ChannelError::Runtime(_))
+    ));
 }
