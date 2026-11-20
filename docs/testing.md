@@ -1,27 +1,23 @@
 # Testing your service
 
-See [Concepts](concepts.md) for how the pieces fit. For a runnable service with a test suite, see the [service template](https://github.com/fermi-ad/rust-grpc-service-template).
+How to test a service built with this crate: handler logic, access policy through a real server, health, spans and metrics. The helpers live in `rust_grpc_lib::testing`; the module rustdoc lists every one.
 
-The helpers live in `rust_grpc_lib::testing` (`test-util` feature, which implies `server`). The module's rustdoc lists every helper.
+Enable them with `rust-grpc-lib` plus the `test-util` feature in `[dev-dependencies]` only: it ships a publicly known RSA key, and `test_validator` trusts anything signed with it. Add `tokio` (for `#[tokio::test]`) and nothing else; tonic types come from `rust_grpc_lib::tonic`, and `testing::health_status`, `health_watch` and `StreamExt` replace `tonic-health` and `futures-util`.
 
-> [!WARNING]
-> Enable `test-util` in `[dev-dependencies]` only. It ships a publicly known RSA key, and `test_validator` trusts anything signed with it. Nothing stops a release build from enabling the feature. A server built with `test_validator` in production lets **anyone** authenticate as any user with any role.
+| To test | Use | Gate involved |
+|---|---|---|
+| Handler logic | [`authenticated_request`, `public_request`, `RequestContext::for_test`](#unit-test-a-handler) | No |
+| Access policy and the real wire path | [`TestServer`, `test_token`](#test-a-service-end-to-end) | Yes |
+| Every method enforces its policy | [`assert_policy_table_conforms`](#check-policies-conformance) | Yes |
+| Health | [`health_status`, `health_watch`](#check-health) | n/a |
+| `rpc` span fields | [`capture_spans`](#capture-spans) | n/a |
+| Metrics | [`TestServer::with_metrics`, `InMemoryMetrics`](#assert-on-metrics) | n/a |
 
-Tests need `rust-grpc-lib` with `test-util` in `[dev-dependencies]`, plus `tokio` (for `#[tokio::test]`). Nothing else: tonic types come from `rust_grpc_lib::tonic`, health queries from `testing::health_status` / `health_watch`, and `testing::StreamExt` reads the `Watch` stream, so no `tonic`, `tonic-health` or `futures-util` dependency is needed.
+Examples use `ExampleDB` (`package services.example;`) implemented by `ExampleDbService`; substitute your own generated types.
 
-| Kind of test | Helpers |
-|---|---|
-| [Handler unit tests](#handler-unit-tests) | `claims_with_roles`, `KeycloakClaimsBuilder`, `authenticated_request`, `public_request`, `RequestContext::for_test`, `PublicContext::for_test` |
-| [Live-server tests](#live-server-tests) | `test_validator`, `test_token`, `expired_test_token` |
-| [Health checks](#health-checks) | `health_status`, `health_watch`, `ServingStatus` |
-| [Conformance checks](#conformance-checks) | `assert_policy_table_conforms`, `assert_service_conforms`, `assert_all_rpcs_require_auth`, `assert_all_rpcs_require_role`, `call_rpc` |
-| [Capturing spans](#capturing-spans) | `capture_spans`, `SpanCapture`, `SpanRecord` |
+## Unit-test a handler
 
-The examples below use a service `ExampleDB` (`package services.example;`) implemented by `ExampleDbService`; substitute your own generated types.
-
-## Handler unit tests
-
-After the macro rewrite, handlers take a `rust_grpc_lib::tonic::Request<T>`. These helpers build one carrying what the gate would add, so a test can call the handler directly. The gate is **bypassed**: this tests handler logic, not access policy.
+After the macro rewrite, a handler takes a `rust_grpc_lib::tonic::Request<T>`. These helpers build one carrying what the gate would add, so a test can call the handler directly. The gate is **bypassed**: this tests handler logic, not access policy.
 
 ```rust
 use rust_grpc_lib::testing::{authenticated_request, claims_with_roles, public_request};
@@ -33,51 +29,102 @@ let reply = ExampleDbService.get_end_point_one(req).await.unwrap().into_inner();
 let reply = MyService.my_public_method(public_request(Empty {})).await.unwrap().into_inner();
 ```
 
-- A plain `Request::new`, or `public_request` passed to an authenticated handler, gives `Internal "authentication is not configured"`.
-- `authenticated_request` carries the literal token `"test-token"`, not a JWT. A handler that forwards `ctx.token()` to a real downstream service therefore sends a token that the downstream rejects with `Unauthenticated`. Test forwarding with a live server (below).
+- A plain `Request::new`, or `public_request` passed to an authenticated handler, fails with `Internal "authentication is not configured"`.
 - `claims_with_roles(sub, roles)` covers the common case; `KeycloakClaimsBuilder` builds custom claims (expiry, issuer, client roles).
-- For logic that takes a context rather than a request, build one with `RequestContext::for_test(claims, msg)` or `PublicContext::for_test(msg)`.
-- Contexts are read-only (no `DerefMut`). To simulate more call details, chain `with_rpc(RpcMethod)`, `with_remote_addr(addr)`, `with_metadata(map)` or `with_extension(value)` onto `for_test`: `PublicContext::for_test(msg).with_metadata(map)`.
+- For logic that takes a context rather than a request, build one with `RequestContext::for_test(claims, msg)` or `PublicContext::for_test(msg)`. The context reports method `test.Service/Test` and token `test-token`. Contexts are read-only; chain `with_rpc(RpcMethod)`, `with_remote_addr(addr)`, `with_metadata(map)` or `with_extension(value)` to simulate more call details.
 
-## Live-server tests
+## Test a service end to end
 
-Run the real server on a free port with a validator that trusts test tokens, then call it with a generated client:
+`TestServer` runs your real service behind the real gate on a fresh IPv4 loopback port, and returns once health reports `Serving`:
 
 ```rust
 use rust_grpc_lib::auth::ForwardedToken;
-use rust_grpc_lib::server::GrpcServer;
-use rust_grpc_lib::testing::{test_token, test_validator};
-
-const KID: &str = "my-test-kid";
+use rust_grpc_lib::testing::TestServer;
+use rust_grpc_lib::tonic::Code;
 
 #[tokio::test]
 async fn operator_can_read() -> Result<(), Box<dyn std::error::Error>> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let addr = listener.local_addr()?;
-    let (_stop, rx) = tokio::sync::oneshot::channel::<()>(); // dropping _stop shuts the server down
-    tokio::spawn(
-        GrpcServer::builder(test_validator(KID))
-            .add_service(ExampleDbServer::new, ExampleDbService)
-            .serve_on_listener(listener, async { let _ = rx.await; }),
-    );
+    let server = TestServer::builder("test-kid")
+        .add_service(ExampleDbServer::new, ExampleDbService)
+        .start()
+        .await;
 
-    let token = test_token(KID, "alice", &["operator"]);
-    let mut client = ExampleDbClient::authenticated(&format!("http://{addr}"), ForwardedToken::new(token))?;
+    let token = server.token("alice", &["operator"]);
+    let mut client = ExampleDbClient::authenticated(server.url(), ForwardedToken::new(token))?;
     let reply = client.get_end_point_one(IdList { id: vec![1, 2] }).await?.into_inner();
     // ... assert on reply ...
+
+    // No token: a gated method answers Unauthenticated.
+    let status = ExampleDbClient::public(server.url())?
+        .get_end_point_one(IdList::default())
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), Code::Unauthenticated);
+
+    server.shutdown().await;
     Ok(())
 }
 ```
 
-- `test_token(kid, sub, roles)` is valid for one hour; `expired_test_token(kid, sub, roles)` expired two minutes ago. `test_validator(kid)` rejects tokens minted with another `kid`.
-- `ExampleDbClient::public(..)` sends no token: a `#[public]` method answers normally, and a gated method answers `Unauthenticated`.
-- A garbage or expired token also gives `Unauthenticated`; a valid token missing the role gives `PermissionDenied "required role not present"`.
-- The listener is bound before the server task is spawned, so early connections queue and no startup delay is needed. Each test binds its own port, so tests run in parallel.
-- To test forwarding, start the downstream and the gateway on separate ports with the same `test_validator(KID)`, point the gateway at the downstream's address, and call the gateway with a token. Each service enforces its own policy on the forwarded token.
+- `TestServer::builder(kid)` accepts tokens minted by `server.token(sub, roles)` (valid one hour). Builder options: `.add_service(..)` (as in `GrpcServer`), `.timeout(d)`, `.with_metrics()`, `.shutdown_timeout(d)`. Getters: `url()`, `addr()`.
+- It installs no signal handlers and no environment-configured exporter, and every test gets its own port, so tests run in parallel.
+- Expected statuses: a garbage or expired token gives `Unauthenticated`; a valid token without the role gives `PermissionDenied "required role not present"`; `public` calls to `#[public]` methods succeed.
+- `server.shutdown().await` drains gracefully and **panics** if the server fails or does not drain within five seconds (`.shutdown_timeout(d)` changes that). Drop open streams (including health `Watch`) first. Dropping the `TestServer` instead aborts the server without waiting.
+- **Forwarding:** start the downstream and the gateway as two `TestServer`s built with the same `kid`, point the gateway at the downstream's `url()`, and call the gateway with a token. Each service enforces its own policy on the forwarded token.
 
-## Health checks
+### Custom setups
 
-`GrpcServer` serves `grpc.health.v1.Health` automatically, and two helpers query it without a token, so tests need no `tonic-health` dependency:
+For a setup `TestServer` does not cover (a custom validator, `serve_with_shutdown`, your own listener), bind a listener yourself and use the `test-util` token helpers:
+
+```rust
+use rust_grpc_lib::server::GrpcServer;
+use rust_grpc_lib::testing::{expired_test_token, test_token, test_validator};
+
+let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+let addr = listener.local_addr()?;
+let (stop, rx) = tokio::sync::oneshot::channel::<()>(); // dropping `stop` also shuts the server down
+let server = tokio::spawn(
+    GrpcServer::builder(test_validator("kid"))
+        .add_service(ExampleDbServer::new, ExampleDbService)
+        .serve_on_listener(listener, async { let _ = rx.await; }),
+);
+let token = test_token("kid", "alice", &["operator"]);
+let expired = expired_test_token("kid", "alice", &["operator"]); // expired two minutes ago
+// ... call http://{addr} ...
+let _ = stop.send(());
+server.await??; // Ok(()) after a graceful drain
+```
+
+`test_validator(kid)` rejects tokens minted with another `kid`. The listener is bound before the task starts, so early connections queue and no startup delay is needed.
+
+## Check policies (conformance)
+
+```rust
+use rust_grpc_lib::testing::assert_policy_table_conforms;
+use rust_grpc_lib::tonic::transport::Channel;
+
+let channel = Channel::from_shared(server.url().to_owned())?.connect().await?;
+assert_policy_table_conforms(channel, ExampleDbServer::<ExampleDbService>::new).await;
+```
+
+The second argument is the generated constructor, as in `add_service`; it is never called, only names the generated server and your implementation. The check reads your macro-emitted table and calls every method with an empty message:
+
+- `#[public]` methods must not answer `Unauthenticated` or `PermissionDenied` without a token.
+- Every other method must answer `Unauthenticated` with no token and with an invalid one.
+
+It panics once, listing every mismatch (`service conformance failed for N reason(s)`), and also panics on an empty table. There is no method list to maintain.
+
+It does **not** check:
+
+- **The success path or role denial.** Use a real client (above) or `assert_all_rpcs_require_role(channel, &paths, token_without_role)`.
+- **Methods missing from the table.** The compiler normally closes this gap. For an independent list use `assert_service_conforms(channel, ExampleDbServer::<ExampleDbService>::new, &["getEndPointOne", "getEndPointTwo"])`, which must match the table exactly and sends proto names, so public handlers are actually reached.
+- **That a public handler runs.** `assert_policy_table_conforms` sends Rust names; tonic routes by exact proto name and answers `Unimplemented`.
+
+Lower-level: `assert_all_rpcs_require_auth(channel, &paths)` and `call_rpc(channel, path, token)` take paths like `/services.example.ExampleDB/getEndPointOne`; build them from the generated `SERVICE_NAME` (`format!("/{SERVICE_NAME}/getEndPointOne")`). Health and reflection paths are refused.
+
+## Check health
+
+`GrpcServer` serves `grpc.health.v1.Health` without a token, and two helpers query it:
 
 ```rust
 use rust_grpc_lib::testing::{ServingStatus, StreamExt, health_status, health_watch};
@@ -93,40 +140,12 @@ let mut statuses = health_watch(channel, SERVICE_NAME).await?;
 let first = statuses.next().await.unwrap()?;
 ```
 
-- `health_status(channel, service)` returns `Result<ServingStatus, Status>`. `health_watch(channel, service)` returns `Result<impl Stream<Item = Result<ServingStatus, Status>>, Status>`; read it with `testing::StreamExt` (a re-export of `futures_util::StreamExt`, for `next` and the other combinators), so you need no `futures-util` dependency.
-- `ServingStatus` is the `grpc.health.v1` protobuf enum (`Unknown`, `Serving`, `NotServing`, `ServiceUnknown`).
-- A service the server does not know gives `NotFound`: from `health_status`, and from `health_watch` when it opens the stream.
-- A `GrpcServer` reports `NotServing` as soon as its shutdown future completes. Open `Watch` streams delay graceful shutdown, so drop the stream before waiting for the server task.
+- `health_status` returns `Result<ServingStatus, Status>`; `health_watch` returns `Result<impl Stream<Item = Result<ServingStatus, Status>>, Status>`. `StreamExt` is re-exported so you need no `futures-util`.
+- `ServingStatus` is the `grpc.health.v1` enum: `Unknown`, `Serving`, `NotServing`, `ServiceUnknown`.
+- A service the server does not know gives `NotFound`, from `health_status` and from `health_watch` when it opens the stream.
+- The server reports `NotServing` as soon as shutdown begins. Open `Watch` streams delay graceful shutdown, so drop the stream before waiting for the server to finish.
 
-## Conformance checks
-
-```rust
-use rust_grpc_lib::testing::assert_policy_table_conforms;
-use rust_grpc_lib::tonic::transport::Channel;
-
-let channel = Channel::from_shared(format!("http://{addr}"))?.connect().await?;
-assert_policy_table_conforms(channel, ExampleDbServer::<ExampleDbService>::new).await;
-```
-
-The second argument is the generated constructor, as in `add_service`. It is never called; it names the generated server and your implementation, so neither type is written twice.
-
-The check calls every method in the macro-emitted table with an empty message: public methods must not be rejected without a token; every other method must answer `Unauthenticated` with no token and with an invalid one. It panics once, listing every mismatch, and also on an empty table. There is no method list to maintain.
-
-The public check is weak: any status other than `Unauthenticated` or `PermissionDenied` passes, including `Unavailable`. A table with only public methods therefore passes even when the server is unreachable. Check that the server is up first, for example with `health_status(channel.clone(), "")`.
-
-It does not check:
-
-- **The success path or role denial.** Use a real client (above) or `assert_all_rpcs_require_role(channel, &paths, token_without_role)`.
-- **Methods missing from the table.** Nothing at run time lists a tonic server's methods. The compiler catches most gaps, because every `fn` in an annotated block needs a policy. But two cases get no row and are caught only at run time, where they fail closed with `PermissionDenied "method not permitted"`:
-  - A non-`fn` item in the block, such as a macro invocation that expands to a method. The macro skips it.
-  - A trait method with a default body that the block doesn't override. The bundled tonic traits have no default bodies, so in practice only the first case applies.
-
-  To catch both, use `assert_service_conforms(channel, ExampleDbServer::<ExampleDbService>::new, &["getEndPointOne", ..])` with an independent list of proto names. The list must match the table exactly.
-- **Whether a public handler runs.** The table holds Rust names; tonic routes by exact proto name and answers `Unimplemented`. `assert_service_conforms` sends proto names.
-
-`assert_all_rpcs_require_auth(channel, &paths)` and `call_rpc(channel, path, token)` take paths such as `/services.example.ExampleDB/getEndPointOne`; build them from the generated `SERVICE_NAME` const. Health and reflection paths are refused.
-
-## Capturing spans
+## Capture spans
 
 ```rust
 use rust_grpc_lib::testing::capture_spans;
@@ -134,16 +153,16 @@ use rust_grpc_lib::testing::capture_spans;
 #[tokio::test] // the default current-thread runtime
 async fn emits_rpc_span() {
     let (spans, _guard) = capture_spans(); // keep the guard alive
-    // ... make a call ...
+    // ... start a server and make a call ...
     assert_eq!(spans.field("rpc", "grpc.status").as_deref(), Some("Ok"));
 }
 ```
 
-`spans.spans("rpc")` returns `SpanRecord`s (`name()`, `field(..)`, `has_field(..)`). The subscriber is thread-local, so a `multi_thread` runtime loses spans. Only spans are captured, not events. The fields are listed under [Tracing and logs](server.md#tracing-and-logs).
+`spans.spans("rpc")` returns `SpanRecord`s (`name()`, `field(..)`, `has_field(..)`); `spans.field(span, field)` reads the first span of that name. Values are strings (`Ok`, not `0`). The subscriber is thread-local, so a `multi_thread` runtime loses spans. Only spans are captured, not events. Field meanings are in [Tracing and logs](server.md#tracing-and-logs).
 
-## Metrics
+## Assert on metrics
 
-`TestServer` binds a fresh IPv4 loopback port, supplies a validator for the test key, and waits for health before returning from `start()`. It does not register process signals or use environment-configured exporters. Add your generated service with `.add_service(FooServer::new, implementation)`. Clients can use `server.url()` and mint a bearer token with `server.token(sub, roles)` for protected RPCs. Enable `.with_metrics()` before starting to read `server.metrics()`; calling it without that option panics.
+Use `TestServer::builder(kid).with_metrics()`; it records into an isolated in-memory backend regardless of environment settings. `server.metrics()` panics unless `.with_metrics()` was selected.
 
 ```rust
 use rust_grpc_lib::{
@@ -157,16 +176,19 @@ async fn records_health_calls() {
     let channel = Channel::from_shared(server.url().to_owned()).unwrap().connect().await.unwrap();
     let error = health_status(channel, "example.unregistered.Service").await.unwrap_err();
     assert_eq!(error.code(), Code::NotFound);
-    // This status excludes the harness's successful startup checks.
+    // The harness's own startup health checks (status Ok) are not counted here.
     assert_eq!(server.metrics().wait_for_call_count("grpc.health.v1.Health/Check", Code::NotFound).await, 1);
     server.shutdown().await;
 }
 ```
 
-`shutdown().await` asserts the server drains within the harness timeout (five seconds by default, configurable with `.shutdown_timeout(duration)`) and then shuts down its metrics with a separate flush budget. Drop any open streams first. Dropping the harness instead aborts the server without waiting.
+| Helper | Use |
+|---|---|
+| `wait_for_call_count(method, code).await` | Waits up to five seconds for the first matching completion and returns that series' cumulative count; panics on timeout. `method` is the [exact metric label](server.md#built-in-metrics) (`package.Service/Method`, or `_OTHER`) |
+| `wait_until(\|metrics\| .., timeout).await` | Waits for any condition; panics on timeout, showing the recorded series |
+| `histograms(name)` | `HistogramSnapshot { unit, attributes, count, bounds, bucket_counts }` per point |
+| `counters(name)` | `CounterSnapshot { attributes, value }`; includes up-down counters |
 
-For an existing server fixture, create `InMemoryMetrics::new()` and inject `.with_caller_owned_telemetry(&metrics.telemetry())`. It uses a real SDK meter without a collector or runtime probe. The fixture owns the provider: after serving ends, call `metrics.telemetry().shutdown().await`. Snapshots remain readable after shutdown.
+Account for startup health checks when asserting totals. A response can reach the client before recording finishes, and a cancellation is recorded only once the server sees the drop, so wait instead of reading immediately. Snapshot attribute values are always strings, even for numeric ones (`rpc.response.status_code` is `"5"`, not `5`).
 
-- `histograms(name)` returns `HistogramSnapshot` points with unit, attributes, count, sum, min, max, bounds and bucket counts (including overflow).
-- `counters(name)` returns `CounterSnapshot` points with attributes and cumulative value, including points for up-down counters. Snapshot attributes are rendered as strings, even when exported values are numeric.
-- `wait_for_call_count(method, code).await` waits up to five seconds for a nonzero cumulative count for the exact metric label (or `_OTHER`) and status. A read immediately after a client response can race with the server task; cancellation is tracked only once the server notices the drop. To check a specific count or other condition, use `wait_until(|metrics| ..., timeout).await`. Both poll and panic with recorded series on timeout. Account for startup health checks when asserting exact counts.
+**Existing server fixture?** Create `InMemoryMetrics::new()` and give its builder `.with_caller_owned_telemetry(&metrics.telemetry())`. There is no collector and no runtime probe. You own the provider: after serving ends, call `metrics.telemetry().shutdown().await` (see [Provider ownership](server.md#provider-ownership)); snapshots stay readable afterward.

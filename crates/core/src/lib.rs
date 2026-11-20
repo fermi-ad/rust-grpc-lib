@@ -1,101 +1,20 @@
 //! Authenticated gRPC for Fermilab controls services, built on
-//! [tonic](https://docs.rs/tonic): clients that attach a JWT to every request,
-//! servers whose per-method access policies are enforced before any handler
-//! runs, code generation for the bundled controls `.proto` files, and test
-//! helpers. Import it as `rust_grpc_lib`.
+//! [tonic](https://docs.rs/tonic): clients attach a JWT to every request and
+//! servers enforce per-method access policies before any handler runs.
 //!
-//! Servers get the tools to be secure: per-method access policies, enforced
-//! by the gate that `GrpcServer::add_service` installs. Clients get the tools
-//! to call the servers they need: [`GrpcClient`]'s `public` constructor sends
-//! no token, and `authenticated` attaches one. The target method's policy
-//! decides which to use, and the server's gate is the authority: a gated
-//! method called without a valid token answers `Unauthenticated`.
-//!
-//! # Dependencies
-//!
-//! The consuming crate depends on `rust-grpc-lib` under that name (no
-//! `package = ".."` rename), plus `tokio`, `tracing` and `tracing-subscriber`
-//! as it needs them. It does **not** need `tonic`, `prost`, `tonic-prost`,
-//! `async-trait` or `tonic-health` as direct dependencies: macro and
-//! build-helper output refers only to `::rust_grpc_lib`, which re-exports what
-//! it needs.
-//!
-//! - [`tonic`] and [`prost`] are re-exported whole, so write
-//!   `rust_grpc_lib::tonic::{Request, Response, Status}` and
-//!   `#[derive(rust_grpc_lib::prost::Message)]`.
-//! - [`async_trait`] is tonic's re-export of the `async-trait` attribute, so
-//!   service impls use `#[rust_grpc_lib::async_trait]`.
-//! - With `server`, `rust_grpc_lib::telemetry::opentelemetry` re-exports the
-//!   OpenTelemetry API, so consumers do not need a direct dependency on it.
-//! - With `test-util`, `testing` also provides health-check helpers and
-//!   `StreamExt` to read their stream, so tests need no `tonic-health` or
-//!   `futures-util`.
-//!
-//! These re-exports are the exact versions this crate was built against, so
-//! generated code and your own code always agree on the tonic and prost types.
-//! Use them rather than a direct `tonic` or `prost` dependency: one at a
-//! different version gives types that do not match this crate's.
-//!
-//! # Features
-//!
-//! None is on by default. The client half is always compiled.
-//!
-//! | Feature | Enable it when | Adds |
-//! |---|---|---|
-//! | *(none)* | You call services | [`auth`] client types, [`pool`], [`GrpcClient`] (generates `public` and `authenticated` constructors), the [`tonic`], [`prost`] and [`async_trait`] re-exports |
-//! | `server` | You serve services | `server`, `telemetry`, the [`auth`] contexts and policy types, [`access_controlled_service`], [`roles`], [`any_authenticated`], [`public`] |
-//! | `jwks-url` | Tokens are validated against a JWKS URL | `KeyValidatorConfig::from_jwks_url` |
-//! | `build` | Your `build.rs` generates the bundled protos (`[build-dependencies]`) | `build_support` |
-//! | `test-util` | Tests need tokens, contexts, health queries, metrics or live-server checks (`[dev-dependencies]` only); implies `server` | `testing`, `RequestContext::for_test`, `PublicContext::for_test` |
-//!
-//! The `server` feature builds OpenTelemetry, reqwest and rustls for OTLP/HTTP
-//! metrics even when no collector is configured. Client-only builds do not
-//! pull in this telemetry stack.
-//!
-//! `test-util` ships a publicly known RSA key pair: never enable it in a
-//! production build.
-//!
-//! # Protos and TLS
-//!
-//! The bundled protos come only from the org-wide
-//! [interface-definitions](https://github.com/fermi-ad/interface-definitions)
-//! repository; you cannot add your own or select a subset, so every service
-//! and client shares one set of generated types. Services operate over
-//! plaintext: the infra team handles TLS, not this library, so do not enable
-//! tonic's TLS features or configure TLS settings. Bearer tokens are never
-//! logged.
-//!
-//! # Modules
-//!
-//! - [`auth`]: token providers, the client interceptor, validators, request
-//!   contexts, access policies and how they are enforced.
-//! - [`pool`]: the shared channel pool and its keep-alive settings.
-//! - `server` (`server`): `GrpcServer::builder`, the gate, health and per-RPC
-//!   tracing spans, signal handling and bounded graceful shutdown.
-//! - `telemetry` (`server`): per-RPC and runtime metrics, OTLP/HTTP configuration,
-//!   explicit provider ownership and the OpenTelemetry API re-export.
-//! - `build_support` (`build`): `generate_protos` and `Config` for `build.rs`.
-//! - `testing` (`test-util`): claims, contexts, tokens, conformance checks,
-//!   health queries (with `testing::StreamExt` to read `health_watch`) and
-//!   span capture, in-memory metrics and an isolated server harness.
-//!
-//! # Getting started
-//!
-//! The [service template](https://github.com/fermi-ad/rust-grpc-service-template)
-//! is a runnable example service built on this crate. The
-//! [guides](https://github.com/fermi-ad/rust-grpc-lib/tree/HEAD/docs) cover
-//! concepts, clients, servers, testing and troubleshooting.
+//! Use the re-exported [`tonic`], [`prost`] and [`async_trait`] instead of
+//! direct dependencies so generated code and yours agree on versions. Services
+//! run over plaintext (TLS is handled by infrastructure), and `test-util` ships
+//! a publicly known key pair, so never enable it in production. See the
+//! [guides](https://github.com/fermi-ad/rust-grpc-lib/tree/HEAD/docs).
 
 // Maintainer notes.
 //
 // - Server-only dependencies are optional behind `server` so client-only
 //   builds skip them; the client half is small and `server` needs most of it,
 //   so it is always compiled.
-// - `server`, `telemetry`, `trace` (private), `testing` and `build_support`
-//   are gated with `any(feature = "..", test)` so unit tests build without
-//   features; `Cargo.toml` repeats their optional dependencies under
-//   `[dev-dependencies]`, including OpenTelemetry and `http-body` (`trace`
-//   tests use body frames, which tonic does not re-export).
+// - Feature-gated modules also compile in unit tests, so their optional
+//   dependencies are repeated under `[dev-dependencies]`.
 // - Crate docs link only to items present in every feature combination.
 //   Feature-gated items are plain code spans: a link would break without the
 //   feature. The macro re-exports add a `doc` arm to their gate to stay
@@ -147,7 +66,6 @@ pub mod __private {
     pub use ::tonic;
     pub use ::tonic_prost;
 
-    /// Exact wire method names routed by a generated server.
     #[doc(hidden)]
     pub trait WireMethods {
         /// Canonical `package.Service/Method` paths, without the leading slash.
