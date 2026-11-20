@@ -1,0 +1,23 @@
+error[E0277]: `Unannotated` has no access policy for the generated server `UnannotatedServer<Unannotated>`
+  --> src/compile_fail_cases/server_builder_unannotated_service.rs:50:80
+   |
+50 |     let _ = GrpcServer::builder(validator).add_service(UnannotatedServer::new, Unannotated);
+   |                                            -----------                         ^^^^^^^^^^^ this type was not annotated for that service
+   |                                            |
+   |                                            required by a bound introduced by this call
+   |
+help: the trait `ServicePolicy<UnannotatedServer<Unannotated>>` is not implemented for `Unannotated`
+  --> src/compile_fail_cases/server_builder_unannotated_service.rs:16:1
+   |
+16 | struct Unannotated;
+   | ^^^^^^^^^^^^^^^^^^
+   = note: annotate the `impl` of the service trait with `#[rust_grpc_lib::access_controlled_service]`, above `#[async_trait]`
+   = note: if the trait is imported by name and the generated server is not in scope, add `server = path::to::FooServer` to the attribute
+note: required by a bound in `GrpcServerBuilder::<V>::add_service`
+  --> $WORKSPACE/crates/core/src/server.rs
+   |
+   |     pub fn add_service<T, S>(mut self, constructor: impl FnOnce(T) -> S, implementation: T) -> Self
+   |            ----------- required by a bound in this associated function
+   |     where
+   |         T: ServicePolicy<S>,
+   |            ^^^^^^^^^^^^^^^^ required by this bound in `GrpcServerBuilder::<V>::add_service`
