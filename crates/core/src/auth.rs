@@ -1,81 +1,67 @@
-//! Re-exports from `rust-auth-lib` plus the two gRPC-specific sub-modules.
+//! JWT authentication and authorization, including the `rust-auth-lib`
+//! re-exports, so you need no direct dependency on that crate.
 //!
-//! Everything a consumer needs for JWT auth lives here; a direct dependency on
-//! `rust-auth-lib` is not required.
+//! - **Client** (always compiled): [`ClientJwtInterceptor`] attaches a
+//!   [`TokenProvider`]'s token to every call; [`AuthenticatedClient`] is the
+//!   transport of a client built with `authenticated`.
+//! - **Server** (`server` feature): the handler parameters `RequestContext`
+//!   and `PublicContext` (both dereference to `CallInfo`), and the policy
+//!   types `ServicePolicy`, `PolicyTable`, `Access` and `RoleMode`.
 //!
-//! # Sub-modules
+//! # How access is enforced
 //!
-//! - [`interceptor`] — [`ClientJwtInterceptor`], the outbound client interceptor
-//!   that attaches `Bearer` tokens to every outgoing request.
-//! - [`layer`] — [`JwtValidationLayer`] / [`JwtValidationService`], the
-//!   [`validator_into_layer`] and [`wrap_service`] constructors for
-//!   server-side JWT validation.
-//! - [`context`] — [`RequestContext`], the per-request bundle of message,
-//!   claims, metadata and extensions that handlers should use to read claims.
+//! `#[access_controlled_service]` emits a `ServicePolicy` table from each
+//! method's `#[roles(..)]`, `#[any_authenticated]` or `#[public]`. It checks
+//! nothing itself. `GrpcServer::add_service` wraps the server in a gate that,
+//! before any handler runs, validates the token, checks realm roles and strips
+//! the `authorization` header. It fails closed: an unannotated type cannot be
+//! served, and a method missing from the table is denied. See
+//! `docs/server.md` for the status codes.
 //!
-//! # Re-exported items
+//! # Observability
 //!
-//! **Traits:** [`TokenProvider`], [`TokenValidator`], [`Claims`], [`Ephemeral`]
+//! The gate records `access` and, once a token validates, `user` on the `rpc`
+//! span. A role denial logs a `warn` event on target `rust_grpc_lib::authz`
+//! with `user`, `rpc.service`, `rpc.method`, `required_roles`, `role_mode`
+//! and `remote_addr`. Tokens, other claims and held roles are never logged.
 //!
-//! **Token sources:** [`FileTokenProvider`], [`ForwardedToken`]
+//! # Re-exports from `rust-auth-lib`
 //!
-//! **Validators:** [`KeyValidator`], [`KeyValidatorConfig`]
+//! [`TokenProvider`], [`TokenValidator`], [`Claims`], [`Ephemeral`],
+//! [`FileTokenProvider`], [`ForwardedToken`], [`KeyValidator`],
+//! [`KeyValidatorConfig`], [`AuthError`], [`ConfigError`], [`TokenError`] and
+//! [`KeycloakClaims`]. `KeycloakClientCredentialsProvider` is not
+//! re-exported; depend on `rust-auth-lib` directly to use it.
 //!
-//! **Errors:** [`AuthError`], [`ConfigError`], [`TokenError`]
-//!
-//! **Claims:** [`KeycloakClaims`]
-//!
-//! **Free function:** [`extract_token`] — strips the `Bearer ` prefix from an
-//! incoming tonic request's `Authorization` header and returns a
-//! [`ForwardedToken`].
-//!
-//! # Intentionally omitted
-//!
-//! - `KeycloakClientCredentialsProvider` — requires a live Keycloak token
-//!   endpoint; use `rust-auth-lib` directly if needed.
+//! [`ForwardedToken`] carries a **user's** credentials: a service gets one from
+//! `ctx.token()` (the caller's token) to call another service as that user,
+//! and a tool or test that already holds a user's token can build one with
+//! `ForwardedToken::new`. A service's own identity is a [`FileTokenProvider`].
 
-use tonic::Request;
+// Server items are code spans, not links: they are `cfg`-gated, so links
+// would break in a docs build without `server`.
 
-pub mod context;
-pub mod interceptor;
-pub mod layer;
-#[cfg(test)]
-mod tests;
+#[cfg(any(feature = "server", test))]
+pub(crate) mod caller;
+#[cfg(any(feature = "server", test))]
+pub(crate) mod context;
+#[cfg(any(feature = "server", test))]
+pub(crate) mod gate;
+pub(crate) mod interceptor;
+#[cfg(any(feature = "server", test))]
+pub(crate) mod policy;
 
-// Traits
-pub use rust_auth_lib::Claims;
-pub use rust_auth_lib::Ephemeral;
-pub use rust_auth_lib::TokenProvider;
-pub use rust_auth_lib::TokenValidator;
-
-// Token sources
-pub use rust_auth_lib::FileTokenProvider;
-pub use rust_auth_lib::ForwardedToken;
-
-// Validators
-pub use rust_auth_lib::KeyValidator;
-pub use rust_auth_lib::KeyValidatorConfig;
-
-// Error types
-pub use rust_auth_lib::AuthError;
-pub use rust_auth_lib::ConfigError;
-pub use rust_auth_lib::TokenError;
-
-// Keycloak-specific claims
 pub use rust_auth_lib::keycloak::KeycloakClaims;
+pub use rust_auth_lib::{
+    AuthError, Claims, ConfigError, Ephemeral, FileTokenProvider, ForwardedToken, KeyValidator,
+    KeyValidatorConfig, TokenError, TokenProvider, TokenValidator,
+};
 
-// gRPC-specific types from submodules
-pub use context::{RequestContext, RpcMethod};
-pub use interceptor::ClientJwtInterceptor;
-pub use layer::{JwtValidationLayer, JwtValidationService, validator_into_layer, wrap_service};
+pub use interceptor::{AuthenticatedClient, ClientJwtInterceptor};
 
-/// Construct from the metadata of an incoming tonic request.
-pub fn extract_token<T>(request: &Request<T>) -> Result<ForwardedToken, TokenError> {
-    request
-        .metadata()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(ForwardedToken::new)
-        .ok_or(TokenError::EmptyAccessToken)
-}
+#[cfg(any(feature = "server", test))]
+pub(crate) use context::RpcSpan;
+#[cfg(any(feature = "server", test))]
+pub use context::{CallInfo, PublicContext, RequestContext, RpcMethod};
+#[cfg(any(feature = "server", test))]
+pub use policy::{Access, MethodPolicy, PolicyTable, RoleMode, ServicePolicy};
