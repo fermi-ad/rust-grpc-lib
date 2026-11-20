@@ -1,4 +1,4 @@
-//! Handler parameters: [`RequestContext`], [`PublicContext`] and the
+//! Handler parameters: [`AuthenticatedContext`], [`PublicContext`] and the
 //! [`CallInfo`] they dereference to.
 
 // The macro rewrites the context parameter to `tonic::Request<T>` (to match
@@ -33,7 +33,7 @@ pub(crate) use rpc::RpcSpan;
 /// ```rust
 /// # use std::marker::PhantomData;
 /// # use rust_grpc_lib::access_controlled_service;
-/// # use rust_grpc_lib::auth::{PublicContext, RequestContext};
+/// # use rust_grpc_lib::auth::{PublicContext, AuthenticatedContext};
 /// # use rust_grpc_lib::tonic::{Request, Response, Status};
 /// # struct Arm; struct Ping; struct Reply;
 /// # trait Arming {
@@ -45,7 +45,7 @@ pub(crate) use rpc::RpcSpan;
 /// #[access_controlled_service]
 /// impl Arming for MyService {
 ///     #[roles(any("operator"))]
-///     async fn arm(&self, ctx: RequestContext<Arm>) -> Result<Response<Reply>, Status> {
+///     async fn arm(&self, ctx: AuthenticatedContext<Arm>) -> Result<Response<Reply>, Status> {
 ///         tracing::info!(who = ctx.sub(), "arming");
 ///         # Ok(Response::new(Reply))
 ///     }
@@ -65,7 +65,7 @@ pub(crate) use rpc::RpcSpan;
 /// the call details. The token is not in the metadata, and `Debug` prints it
 /// as `<redacted>`.
 #[derive(Debug)]
-pub struct RequestContext<T> {
+pub struct AuthenticatedContext<T> {
     /// The validated claims of the caller.
     pub claims: KeycloakClaims,
     /// The request message (or request stream).
@@ -74,7 +74,7 @@ pub struct RequestContext<T> {
     info: CallInfo,
 }
 
-impl<T> RequestContext<T> {
+impl<T> AuthenticatedContext<T> {
     /// Build a context from a request. Only macro-generated code calls this.
     ///
     /// # Errors
@@ -94,7 +94,7 @@ impl<T> RequestContext<T> {
             return Err(not_configured(
                 "request has no verified caller; the service is not served through \
                  `GrpcServer::add_service`, or its method is `#[public]` and takes a \
-                 `RequestContext`",
+                 `AuthenticatedContext`",
             ));
         };
 
@@ -184,11 +184,11 @@ impl<T> RequestContext<T> {
     /// another service as the caller, such as a token-forwarding gateway:
     ///
     /// ```rust,no_run
-    /// # use rust_grpc_lib::{GrpcClient, auth::RequestContext};
+    /// # use rust_grpc_lib::{GrpcClient, auth::AuthenticatedContext};
     /// # #[derive(GrpcClient)]
     /// # struct FooClient<T>(T);
     /// # impl<T> FooClient<T> { fn new(inner: T) -> Self { Self(inner) } }
-    /// # fn f(ctx: &RequestContext<()>, url: &str) -> Result<(), rust_grpc_lib::pool::ChannelError> {
+    /// # fn f(ctx: &AuthenticatedContext<()>, url: &str) -> Result<(), rust_grpc_lib::pool::ChannelError> {
     /// let client = FooClient::authenticated(url, ctx.token())?;
     /// # Ok(())
     /// # }
@@ -209,8 +209,8 @@ impl<T> RequestContext<T> {
     ///
     /// ```rust
     /// # #[cfg(feature = "test-util")] {
-    /// # use rust_grpc_lib::{auth::RequestContext, testing::claims_with_roles};
-    /// let ctx = RequestContext::for_test(claims_with_roles("alice", &[]), ());
+    /// # use rust_grpc_lib::{auth::AuthenticatedContext, testing::claims_with_roles};
+    /// let ctx = AuthenticatedContext::for_test(claims_with_roles("alice", &[]), ());
     /// let request = ctx.forward("downstream message");
     /// assert_eq!(request.metadata().get("authorization").unwrap(), "Bearer test-token");
     /// # }
@@ -229,8 +229,8 @@ impl<T> RequestContext<T> {
     ///
     /// ```rust
     /// # #[cfg(feature = "test-util")] {
-    /// # use rust_grpc_lib::{auth::RequestContext, testing::claims_with_roles};
-    /// let ctx = RequestContext::for_test(claims_with_roles("alice", &[]), vec![1, 2]);
+    /// # use rust_grpc_lib::{auth::AuthenticatedContext, testing::claims_with_roles};
+    /// let ctx = AuthenticatedContext::for_test(claims_with_roles("alice", &[]), vec![1, 2]);
     /// let request = ctx.into_forwarded();
     /// assert_eq!(request.get_ref(), &[1, 2]);
     /// assert_eq!(request.metadata().get("authorization").unwrap(), "Bearer test-token");
@@ -247,9 +247,9 @@ impl<T> RequestContext<T> {
     ///
     /// ```rust
     /// # #[cfg(feature = "test-util")] {
-    /// # use rust_grpc_lib::auth::{Claims, RequestContext, TokenProvider};
+    /// # use rust_grpc_lib::auth::{Claims, AuthenticatedContext, TokenProvider};
     /// # use rust_grpc_lib::testing::claims_with_roles;
-    /// let ctx = RequestContext::for_test(claims_with_roles("alice", &[]), vec![1, 2]);
+    /// let ctx = AuthenticatedContext::for_test(claims_with_roles("alice", &[]), vec![1, 2]);
     /// let (message, token) = ctx.into_parts();
     /// assert_eq!(message, [1, 2]);
     /// assert_eq!(token.get_token().unwrap(), "test-token");
@@ -275,7 +275,7 @@ fn authorized<U>(token: &Redacted<ForwardedToken>, message: U) -> Request<U> {
     request
 }
 
-impl<T> Deref for RequestContext<T> {
+impl<T> Deref for AuthenticatedContext<T> {
     type Target = CallInfo;
 
     fn deref(&self) -> &CallInfo {

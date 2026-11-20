@@ -1,7 +1,7 @@
 //! [`Caller`]: the crate-private proof that a call was authenticated.
 
 // Security invariant: a `Caller` is the only proof of authentication that
-// `RequestContext::try_from_request` accepts. Only the gate (and
+// `AuthenticatedContext::try_from_request` accepts. Only the gate (and
 // `testing::authenticated_request`) inserts one, and `pub(crate)` stops other
 // crates from forging it. Do not widen its or its fields' visibility.
 //

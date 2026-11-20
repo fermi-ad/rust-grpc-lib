@@ -21,7 +21,7 @@ use crate::auth::{KeycloakClaims, RpcMethod};
 /// ```rust
 /// # use std::marker::PhantomData;
 /// # use rust_grpc_lib::access_controlled_service;
-/// # use rust_grpc_lib::auth::RequestContext;
+/// # use rust_grpc_lib::auth::AuthenticatedContext;
 /// # use rust_grpc_lib::tonic::{Code, Request, Response, Status};
 /// # trait Greeter {
 /// #     async fn greet(&self, request: Request<String>) -> Result<Response<String>, Status>;
@@ -33,7 +33,7 @@ use crate::auth::{KeycloakClaims, RpcMethod};
 /// #[access_controlled_service]
 /// impl Greeter for MyGreeter {
 ///     #[any_authenticated]
-///     async fn greet(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+///     async fn greet(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
 ///         Ok(Response::new(format!("hello {}", ctx.sub())))
 ///     }
 /// }

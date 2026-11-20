@@ -15,7 +15,7 @@ impl Echo for Server {
     #[any_authenticated]
     async fn echo(
         &self,
-        ctx: rust_grpc_lib::auth::RequestContext,
+        ctx: rust_grpc_lib::auth::AuthenticatedContext,
     ) -> Result<Response<String>, Status> {
         Ok(Response::new(String::new()))
     }

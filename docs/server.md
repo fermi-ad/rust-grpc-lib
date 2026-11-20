@@ -10,7 +10,7 @@ The `Cargo.toml` entries are in the [README](../README.md#install). Rules that a
 
   | Feature | Enables |
   |---|---|
-  | `server` | `GrpcServer`, `#[access_controlled_service]` and the policy attributes, `RequestContext` / `PublicContext`, the `telemetry` module |
+  | `server` | `GrpcServer`, `#[access_controlled_service]` and the policy attributes, `AuthenticatedContext` / `PublicContext`, the `telemetry` module |
   | `jwks-url` | `AUTH_JWKS_URL` and `KeyValidatorConfig::from_jwks_url` (fetch keys over HTTP) |
   | `build` | `build_support::generate_protos`; goes in `[build-dependencies]` |
   | `test-util` | The `testing` module (implies `server`); goes in `[dev-dependencies]` |
@@ -57,20 +57,20 @@ let config = Config::new()
 
 ```rust
 use rust_grpc_lib::access_controlled_service;
-use rust_grpc_lib::auth::RequestContext;
+use rust_grpc_lib::auth::AuthenticatedContext;
 use rust_grpc_lib::tonic::{Response, Status};
 
 #[access_controlled_service] // must be ABOVE #[rust_grpc_lib::async_trait]
 #[rust_grpc_lib::async_trait]
 impl ExampleDb for ExampleDbService {
     #[roles(any("operator", "admin"))]
-    async fn get_end_point_one(&self, ctx: RequestContext<IdList>) -> Result<Response<ReplyOne>, Status> {
+    async fn get_end_point_one(&self, ctx: AuthenticatedContext<IdList>) -> Result<Response<ReplyOne>, Status> {
         tracing::info!(user = ctx.sub(), ids = ?ctx.message.id, "lookup");
         Ok(Response::new(ReplyOne::default()))
     }
 
     #[any_authenticated]
-    async fn get_end_point_two(&self, ctx: RequestContext<IdList>) -> Result<Response<ReplyTwo>, Status> {
+    async fn get_end_point_two(&self, ctx: AuthenticatedContext<IdList>) -> Result<Response<ReplyTwo>, Status> {
         Ok(Response::new(ReplyTwo::default()))
     }
 }
@@ -80,14 +80,14 @@ Every method declares exactly one policy:
 
 | Attribute | Who gets in | Handler parameter |
 |---|---|---|
-| `#[roles(any("a", "b"))]` | Valid token with at least one listed realm role | `RequestContext<T>` |
-| `#[roles(all("a", "b"))]` | Valid token with every listed realm role | `RequestContext<T>` |
-| `#[any_authenticated]` | Any valid token | `RequestContext<T>` |
+| `#[roles(any("a", "b"))]` | Valid token with at least one listed realm role | `AuthenticatedContext<T>` |
+| `#[roles(all("a", "b"))]` | Valid token with every listed realm role | `AuthenticatedContext<T>` |
+| `#[any_authenticated]` | Any valid token | `AuthenticatedContext<T>` |
 | `#[public]` | Anyone; a token, if sent, is neither read nor validated | `PublicContext<T>` |
 
 - Roles are string literals or paths to `&str` constants. Only **realm** roles count; client roles never match.
 - `T` is the message, or `rust_grpc_lib::tonic::Streaming<Req>` for client- and bidirectional-streaming RPCs. Bind the context to a plain name (`ctx`, `mut ctx`); a plain `tonic::Request<T>` parameter is a compile error.
-- Policy attributes need no import inside the block; `RequestContext` and `PublicContext` must be in scope.
+- Policy attributes need no import inside the block; `AuthenticatedContext` and `PublicContext` must be in scope.
 - Wire names match the Rust names ignoring case, `_` and `r#` (`get_end_point_one` matches `getEndPointOne`). Two methods that collide this way are a compile error.
 - If `FooServer` cannot be derived from the trait path, write `#[access_controlled_service(server = path::to::FooServer)]` (no generics).
 - The macro only declares policies; the gate that `add_service` installs enforces them. A context built for a call that skipped the gate makes the call fail with `Internal "authentication is not configured"` before your body runs. Unit tests therefore call handlers with a `Request<T>` (see [Unit-test a handler](testing.md#unit-test-a-handler)), and rust-analyzer may show the trait's `Request<T>` signature instead of `ctx`.
@@ -98,7 +98,7 @@ Compile errors are listed in the `access_controlled_service` rustdoc; the common
 
 | Type | Members |
 |---|---|
-| `RequestContext<T>` | `claims`, `message`, `sub()`, `exp_unix()`, `is_expired()`, `has_role(..)`, `token()`, `forward(msg)`, `into_forwarded()`, `into_parts()`. `Debug` redacts the token |
+| `AuthenticatedContext<T>` | `claims`, `message`, `sub()`, `exp_unix()`, `is_expired()`, `has_role(..)`, `token()`, `forward(msg)`, `into_forwarded()`, `into_parts()`. `Debug` redacts the token |
 | `PublicContext<T>` | `message`. No claims or token, even if the client sent one |
 | `CallInfo` (both deref to it, read-only) | `rpc` (`RpcMethod { service, method }`, proto wire names), `remote_addr`, `metadata` (never contains `authorization`), `extensions`, `span()`, `instrument(fut)` |
 

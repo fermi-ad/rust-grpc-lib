@@ -13,7 +13,7 @@ struct Server;
 #[access_controlled_service]
 impl Echo for Server {
     #[roles(some("admin"))]
-    async fn echo(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn echo(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 }

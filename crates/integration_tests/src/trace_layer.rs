@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use rust_grpc_lib::access_controlled_service;
-use rust_grpc_lib::auth::{RequestContext, RpcMethod};
+use rust_grpc_lib::auth::{AuthenticatedContext, RpcMethod};
 use rust_grpc_lib::server::GrpcServer;
 use rust_grpc_lib::testing::capture_spans;
 use rust_grpc_lib::tonic::{Code, Response, Status};
@@ -36,7 +36,7 @@ impl ExampleDb for Stub {
     #[tracing::instrument(skip_all)]
     async fn get_end_point_one(
         &self,
-        ctx: RequestContext<IdList>,
+        ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyOne>, Status> {
         *self.seen_method.lock().unwrap() = Some(ctx.rpc.clone());
         Ok(Response::new(ReplyOne {
@@ -48,7 +48,7 @@ impl ExampleDb for Stub {
     #[any_authenticated]
     async fn get_end_point_two(
         &self,
-        _ctx: RequestContext<IdList>,
+        _ctx: AuthenticatedContext<IdList>,
     ) -> Result<Response<ReplyTwo>, Status> {
         sleep(Duration::from_secs(30)).await;
         Err(Status::unimplemented("unreachable in the tests"))

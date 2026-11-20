@@ -60,7 +60,7 @@ const INVALID_TOKEN: &str = "not-a-valid-jwt";
 ///
 /// ```rust,no_run
 /// # use std::marker::PhantomData;
-/// # use rust_grpc_lib::{access_controlled_service, auth::RequestContext};
+/// # use rust_grpc_lib::{access_controlled_service, auth::AuthenticatedContext};
 /// # use rust_grpc_lib::tonic::{Request, Response, Status, server::NamedService};
 /// # trait ExampleDb {
 /// #     async fn get(&self, r: Request<()>) -> Result<Response<()>, Status>;
@@ -72,7 +72,7 @@ const INVALID_TOKEN: &str = "not-a-valid-jwt";
 /// # #[access_controlled_service]
 /// # impl ExampleDb for MyDb {
 /// #     #[any_authenticated]
-/// #     async fn get(&self, ctx: RequestContext<()>) -> Result<Response<()>, Status> { todo!() }
+/// #     async fn get(&self, ctx: AuthenticatedContext<()>) -> Result<Response<()>, Status> { todo!() }
 /// # }
 /// # async fn demo(channel: rust_grpc_lib::tonic::transport::Channel) {
 /// use rust_grpc_lib::testing::assert_policy_table_conforms;
@@ -123,7 +123,7 @@ where
 ///
 /// ```rust,no_run
 /// # use std::marker::PhantomData;
-/// # use rust_grpc_lib::{access_controlled_service, auth::RequestContext};
+/// # use rust_grpc_lib::{access_controlled_service, auth::AuthenticatedContext};
 /// # use rust_grpc_lib::tonic::{Request, Response, Status, server::NamedService};
 /// # trait ExampleDb {
 /// #     async fn get_end_point_one(&self, r: Request<()>) -> Result<Response<()>, Status>;
@@ -135,7 +135,7 @@ where
 /// # #[access_controlled_service]
 /// # impl ExampleDb for MyDb {
 /// #     #[any_authenticated]
-/// #     async fn get_end_point_one(&self, ctx: RequestContext<()>) -> Result<Response<()>, Status> { todo!() }
+/// #     async fn get_end_point_one(&self, ctx: AuthenticatedContext<()>) -> Result<Response<()>, Status> { todo!() }
 /// # }
 /// # async fn demo(channel: rust_grpc_lib::tonic::transport::Channel) {
 /// use rust_grpc_lib::testing::assert_service_conforms;

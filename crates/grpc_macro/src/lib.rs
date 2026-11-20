@@ -73,7 +73,7 @@ pub fn grpc_client_derive(input: TokenStream) -> TokenStream {
 /// - `#[roles(all("a", "b"))]`: every listed role.
 ///
 /// Each role is a string literal or a path to a `&str` constant. The method
-/// takes a `RequestContext<T>`. See [`access_controlled_service`] for an
+/// takes an `AuthenticatedContext<T>`. See [`access_controlled_service`] for an
 /// example and the errors a malformed list raises.
 ///
 /// Policy attributes are valid only on a method inside an
@@ -87,7 +87,7 @@ pub fn roles(_attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Access policy: any caller with a valid token; no role is needed.
 ///
-/// The method takes a `RequestContext<T>`. Takes no arguments; placement rules
+/// The method takes an `AuthenticatedContext<T>`. Takes no arguments; placement rules
 /// as for [`roles`].
 #[proc_macro_attribute]
 pub fn any_authenticated(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -117,14 +117,14 @@ pub fn public(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// Write it **above** `#[rust_grpc_lib::async_trait]`, so it sees the `async fn`
 /// signatures before `async_trait` rewrites them. Each method's first
-/// non-`self` parameter is `RequestContext<T>` (`roles`, `any_authenticated`)
+/// non-`self` parameter is `AuthenticatedContext<T>` (`roles`, `any_authenticated`)
 /// or `PublicContext<T>` (`public`), matched by its last path segment and
 /// bound to a plain name such as `ctx` or `mut ctx`.
 ///
 /// ```rust
 /// # use std::marker::PhantomData;
 /// # use grpc_macro::access_controlled_service;
-/// # use rust_grpc_lib::auth::{PublicContext, RequestContext};
+/// # use rust_grpc_lib::auth::{PublicContext, AuthenticatedContext};
 /// # use rust_grpc_lib::tonic::{Request, Response, Status};
 /// # struct Msg;
 /// # #[rust_grpc_lib::async_trait]
@@ -141,21 +141,21 @@ pub fn public(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// #[rust_grpc_lib::async_trait]
 /// impl MyService for MyServer {
 ///     #[roles(any("operator", "admin"))]
-///     async fn set_data(&self, ctx: RequestContext<Msg>) -> Result<Response<Msg>, Status> {
+///     async fn set_data(&self, ctx: AuthenticatedContext<Msg>) -> Result<Response<Msg>, Status> {
 ///         # let _ = ctx;
 ///         // ...
 ///         # Ok(Response::new(Msg))
 ///     }
 ///
 ///     #[roles(all(roles::OPERATOR, roles::ADMIN))]
-///     async fn reset(&self, ctx: RequestContext<Msg>) -> Result<Response<Msg>, Status> {
+///     async fn reset(&self, ctx: AuthenticatedContext<Msg>) -> Result<Response<Msg>, Status> {
 ///         # let _ = ctx;
 ///         // ...
 ///         # Ok(Response::new(Msg))
 ///     }
 ///
 ///     #[any_authenticated]
-///     async fn ping(&self, ctx: RequestContext<Msg>) -> Result<Response<Msg>, Status> {
+///     async fn ping(&self, ctx: AuthenticatedContext<Msg>) -> Result<Response<Msg>, Status> {
 ///         # let _ = ctx;
 ///         // ...
 ///         # Ok(Response::new(Msg))
@@ -203,8 +203,8 @@ pub fn public(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - Arguments on `#[any_authenticated]` or `#[public]`.
 /// - A method with no request parameter.
 /// - A parameter that is not a context, such as a plain `tonic::Request<T>`.
-/// - A context without a message type, such as a bare `RequestContext`.
-/// - The wrong context for the policy, such as `RequestContext` on a
+/// - A context without a message type, such as a bare `AuthenticatedContext`.
+/// - The wrong context for the policy, such as `AuthenticatedContext` on a
 ///   `#[public]` method.
 /// - A context bound to anything but a plain name (destructuring, `ref`, `@`).
 /// - Two methods whose names are equal ignoring case, `_` and `r#`: the gate

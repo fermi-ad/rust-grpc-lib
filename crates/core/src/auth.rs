@@ -4,7 +4,7 @@
 //! - **Client** (always compiled): [`ClientJwtInterceptor`] attaches a
 //!   [`TokenProvider`]'s token to every call; [`AuthenticatedClient`] is the
 //!   transport of a client built with `authenticated`.
-//! - **Server** (`server` feature): the handler parameters `RequestContext`
+//! - **Server** (`server` feature): the handler parameters `AuthenticatedContext`
 //!   and `PublicContext` (both dereference to `CallInfo`), and the policy
 //!   types `ServicePolicy`, `PolicyTable`, `Access` and `RoleMode`.
 //!
@@ -62,6 +62,6 @@ pub use interceptor::{AuthenticatedClient, ClientJwtInterceptor};
 #[cfg(any(feature = "server", test))]
 pub(crate) use context::RpcSpan;
 #[cfg(any(feature = "server", test))]
-pub use context::{CallInfo, PublicContext, RequestContext, RpcMethod};
+pub use context::{AuthenticatedContext, CallInfo, PublicContext, RpcMethod};
 #[cfg(any(feature = "server", test))]
 pub use policy::{Access, MethodPolicy, PolicyTable, RoleMode, ServicePolicy};

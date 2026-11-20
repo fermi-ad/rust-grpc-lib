@@ -86,7 +86,7 @@ pub(super) enum Policy {
 }
 
 impl Policy {
-    /// `#[public]` methods take `PublicContext<T>`, others `RequestContext<T>`.
+    /// `#[public]` methods take `PublicContext<T>`, others `AuthenticatedContext<T>`.
     pub(super) fn is_public(&self) -> bool {
         matches!(self, Self::Public)
     }

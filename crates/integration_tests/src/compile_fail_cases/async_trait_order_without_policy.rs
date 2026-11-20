@@ -14,7 +14,7 @@ struct Server;
 #[rust_grpc_lib::async_trait]
 #[access_controlled_service]
 impl Echo for Server {
-    async fn echo(&self, ctx: RequestContext<String>) -> Result<Response<String>, Status> {
+    async fn echo(&self, ctx: AuthenticatedContext<String>) -> Result<Response<String>, Status> {
         Ok(Response::new(ctx.message))
     }
 }

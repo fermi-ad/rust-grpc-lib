@@ -12,7 +12,7 @@ use super::{RpcMethod, RpcSpan};
 mod tests;
 
 /// The details of one call, shared by
-/// [`RequestContext`](super::RequestContext) and
+/// [`AuthenticatedContext`](super::AuthenticatedContext) and
 /// [`PublicContext`](super::PublicContext) through `Deref` (read-only: a
 /// handler cannot change them). Helpers that only log or trace can take a
 /// `&CallInfo`.
@@ -90,9 +90,9 @@ impl CallInfo {
     ///
     /// ```rust
     /// # use std::sync::mpsc::Sender;
-    /// # use rust_grpc_lib::auth::RequestContext;
+    /// # use rust_grpc_lib::auth::AuthenticatedContext;
     /// # async fn produce(_tx: Sender<u32>) {}
-    /// # fn handler(ctx: &RequestContext<()>, tx: Sender<u32>) {
+    /// # fn handler(ctx: &AuthenticatedContext<()>, tx: Sender<u32>) {
     /// tokio::spawn(ctx.instrument(async move { produce(tx).await }));
     /// # }
     /// ```
